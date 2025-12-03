@@ -2,6 +2,7 @@
 
 #include <string>
 #include <functional>
+#include <vector>
 #include "esp_err.h"
 #include "esp_wifi.h"
 #include "esp_event.h"

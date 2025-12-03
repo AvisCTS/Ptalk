@@ -1,11 +1,11 @@
-#include "WifiManager.h"
+#include "WifiManager.hpp"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
-#include "web_page.h"  // Chứa khung HTML
-#include "logo1.h"     // Chứa dữ liệu ảnh 1
-#include "logo2.h"     // Chứa dữ liệu ảnh 2
+#include "web_page.hpp"  // Chứa khung HTML
+#include "logo1.hpp"     // Chứa dữ liệu ảnh 1
+#include "logo2.hpp"     // Chứa dữ liệu ảnh 2
 
 #include <string>
 #include <algorithm>

@@ -1,5 +1,5 @@
-#include "Display.h"
-#include "font5x7.h"
+#include "Display.hpp"
+#include "font5x7.hpp"
 #include <cstring>
 #include <vector>
 #include "esp_log.h"

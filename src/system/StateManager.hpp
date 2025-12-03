@@ -2,7 +2,7 @@
 #include <functional>
 #include <vector>
 #include <mutex>
-#include "StateTypes.h"
+#include "StateTypes.hpp"
 
 class StateManager {
 public:
