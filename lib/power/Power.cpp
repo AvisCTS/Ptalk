@@ -31,17 +31,33 @@ uint8_t Power::voltageToPercent(float v){
         {3.90, 75}, {4.10, 90}, {4.20, 100}
     };
 
-    if(v <= tbl[0].v) return 0;
-    if(v >= tbl[6].v) return 100;
+    uint8_t raw_percent = 0;
 
-    for(int i=0;i<6;i++){
-        if(v >= tbl[i].v && v < tbl[i+1].v){
-            float r = (v - tbl[i].v) / (tbl[i+1].v - tbl[i].v);
-            return tbl[i].p + r * (tbl[i+1].p - tbl[i].p);
+    if(v <= tbl[0].v) raw_percent = 0;
+    else if(v >= tbl[6].v) raw_percent = 100;
+    else {
+        for(int i=0;i<6;i++){
+            if(v >= tbl[i].v && v < tbl[i+1].v){
+                float r = (v - tbl[i].v) / (tbl[i+1].v - tbl[i].v);
+                raw_percent = tbl[i].p + r * (tbl[i+1].p - tbl[i].p);
+                break;
+            }
         }
     }
-    return 0;
+
+
+    static int8_t last_percent = -1;    // -1 = chưa có dữ liệu lúc đầu
+
+    if(last_percent < 0){
+        last_percent = raw_percent;     // Lần đầu luôn nhận
+    }
+    else if(abs(raw_percent - last_percent) >= 5){
+        last_percent = raw_percent;     // Chỉ cập nhật khi lệch >=5%
+    }
+
+    return last_percent;
 }
+
 
 uint8_t Power::getBatteryPercent(){
     return voltageToPercent(readVoltage());
