@@ -56,11 +56,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+// #include "esp_websocket_client.h"
 
 #include "../lib/display/Display.hpp"
 #include "../lib/display/DisplayTypes.hpp"
 #include "system/StateManager.hpp"
 #include "../lib/display/DisplayAnimator.hpp"
+#include "../lib/power/Power.hpp"
+
 
 #include "vuive.hpp"
 
@@ -99,24 +102,12 @@ extern "C" void app_main(void)
 
     Display display(cfg);
     display.init();
-    static DisplayAnimator animator(&display);
-    animator.setAnimation(&vuive);
-
-    // Tạo task animator
-    xTaskCreatePinnedToCore(
-        DisplayAnimator::taskEntry,
-        "anim_task",
-        4096,
-        &animator,
-        4,
-        NULL,
-        1   // chạy trên core 1
-    );
-
-    // Play animation loop với fps=15
-    animator.play(true, 60);
     
+    Power power(ADC1_CHANNEL_5, 10000, 20000);
+
+
     // while (1) {
+    //     printf("Battery = %d%%\n", power.getBatteryPercent());
     //     // Test fill màu đỏ
     //     display.fill(0xF800);
     //     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -134,7 +125,20 @@ extern "C" void app_main(void)
     //     display.drawText("Hello PTIT", 20, 100, 2, 0xFFFF);
     //     vTaskDelay(pdMS_TO_TICKS(1000));
     // }
-    while(1){
-        vTaskDelay(pdMS_TO_TICKS(5000));
+
+
+    const TickType_t delayMs = pdMS_TO_TICKS(5000);  // 5s
+    char buf[32];
+
+    while (true)
+    {   
+        display.clear();
+        uint8_t percent = power.getBatteryPercent();
+        printf("Battery: %d%%\n", percent);
+        snprintf(buf, sizeof(buf), "Battery: %d%%", percent);
+        display.drawText(buf, 20, 100, 2, 0xFFFF);
+
+        vTaskDelay(delayMs);
     }
+
 }

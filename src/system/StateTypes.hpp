@@ -29,4 +29,12 @@ enum class SystemState : uint8_t {
     MAINTENANCE
 };
 
+// Power level
+enum class PowerState : uint8_t {
+    NORMAL,
+    LOW_BATTERY,
+    CHARGING,
+    FULL_BATTERY
+};
+
 } // namespace state

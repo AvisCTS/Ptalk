@@ -9,6 +9,7 @@ public:
     using InteractionCb = std::function<void(state::InteractionState)>;
     using ConnectivityCb = std::function<void(state::ConnectivityState)>;
     using SystemCb = std::function<void(state::SystemState)>;
+    using PowerCb = std::function<void(state::PowerState)>;
 
     static StateManager& instance();
 
@@ -16,21 +17,25 @@ public:
     void setInteractionState(state::InteractionState s);
     void setConnectivityState(state::ConnectivityState s);
     void setSystemState(state::SystemState s);
+    void setPowerState(state::PowerState s);
 
     // Getters
     state::InteractionState getInteractionState();
     state::ConnectivityState getConnectivityState();
     state::SystemState getSystemState();
+    state::PowerState getPowerState();
 
     // Subscribe (returns handle id) — simple pattern
     int subscribeInteraction(InteractionCb cb);
     int subscribeConnectivity(ConnectivityCb cb);
     int subscribeSystem(SystemCb cb);
+    int subscribePower(PowerCb cb);
 
     // Unsubscribe
     void unsubscribeInteraction(int id);
     void unsubscribeConnectivity(int id);
     void unsubscribeSystem(int id);
+    void unsubscribePower(int id);
 
 private:
     StateManager() = default;
@@ -43,15 +48,18 @@ private:
     state::InteractionState interaction_state = state::InteractionState::IDLE;
     state::ConnectivityState connectivity_state = state::ConnectivityState::OFFLINE;
     state::SystemState system_state = state::SystemState::BOOTING;
+    state::PowerState power_state = state::PowerState::NORMAL;
 
     // simple subscription containers
     int next_sub_id = 1;
     std::vector<std::pair<int, InteractionCb>> interaction_cbs;
     std::vector<std::pair<int, ConnectivityCb>> connectivity_cbs;
     std::vector<std::pair<int, SystemCb>> system_cbs;
+    std::vector<std::pair<int, PowerCb>> power_cbs;
 
     // notify helpers
     void notifyInteraction(state::InteractionState s);
     void notifyConnectivity(state::ConnectivityState s);
     void notifySystem(state::SystemState s);
+    void notifyPower(state::PowerState s);
 };
