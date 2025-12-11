@@ -1,94 +1,143 @@
 #include "PowerManager.hpp"
+#include "../../lib/power/Power.hpp"        // driver của bạn
 #include "esp_log.h"
 
 static const char* TAG = "PowerManager";
 
-PowerManager::PowerManager(Power& power, uint8_t low_battery_threshold)
-    : power_(power), low_batt_threshold_(low_battery_threshold)
-{
+PowerManager::PowerManager(Power* power, const Config& cfg)
+    : power(power), config(cfg) {}
+
+PowerManager::~PowerManager() {
+    stop();
 }
 
-PowerManager::~PowerManager()
-{
-    stopTask();
-}
+bool PowerManager::init() {
+    if (!power) {
+        ESP_LOGE(TAG, "PowerManager - Power driver not provided!");
+        return false;
+    }
 
-void PowerManager::startTask(uint32_t interval_ms)
-{
-    if (task_handle_) return;
-
-    interval_tick_ = interval_ms / portTICK_PERIOD_MS;
-
-    xTaskCreate(
-        &PowerManager::taskEntry,
-        "power_manager_task",
-        4096,
+    timer = xTimerCreate(
+        "PowerManagerTimer",
+        pdMS_TO_TICKS(config.evaluate_interval_ms),
+        pdTRUE,
         this,
-        5,
-        &task_handle_
+        &PowerManager::timerCallbackStatic
     );
 
-    ESP_LOGI(TAG, "PowerManager task started, interval=%d ms", interval_ms);
-}
-
-void PowerManager::stopTask()
-{
-    if (!task_handle_) return;
-
-    vTaskDelete(task_handle_);
-    task_handle_ = nullptr;
-    ESP_LOGI(TAG, "PowerManager task stopped");
-}
-
-void PowerManager::taskEntry(void* param)
-{
-    PowerManager* self = static_cast<PowerManager*>(param);
-    self->taskLoop();
-}
-
-void PowerManager::taskLoop()
-{
-    while(true)
-    {
-        evaluate();
-        vTaskDelay(interval_tick_);
+    if (!timer) {
+        ESP_LOGE(TAG, "Failed to create PowerManager timer");
+        return false;
     }
+
+    return true;
 }
 
-void PowerManager::setState(state::PowerState new_state)
+void PowerManager::start() {
+    if (started) return;
+    started = true;
+
+    if (timer) {
+        xTimerStart(timer, 0);
+    }
+
+    ESP_LOGI(TAG, "PowerManager started");
+}
+
+void PowerManager::stop() {
+    if (!started) return;
+    started = false;
+
+    if (timer) {
+        xTimerStop(timer, 0);
+    }
+
+    ESP_LOGI(TAG, "PowerManager stopped");
+}
+
+void PowerManager::timerCallbackStatic(TimerHandle_t xTimer) {
+    PowerManager* self = static_cast<PowerManager*>(pvTimerGetTimerID(xTimer));
+    if (self) self->timerCallback();
+}
+
+void PowerManager::timerCallback() {
+    if (!power) return;
+
+    float voltage = power->getVoltage();
+    uint8_t percent = power->getBatteryPercent();
+    uint8_t charging = power->isCharging();  // 1 or STATUS_UNKNOWN
+    uint8_t full = power->isFull();          // 1 or STATUS_UNKNOWN
+
+    // Detect battery removed / floating input OR invalid reading
+    if (voltage < 0.0f || percent == BATTERY_INVALID) {
+        battery_present = false;
+        publishIfChanged(state::PowerState::ERROR);
+        return;
+    }
+
+    battery_present = true;
+    last_voltage = voltage;
+
+    // Smoothing
+    if (config.enable_smoothing) {
+        if (first_sample) {
+            last_percent = percent;
+            first_sample = false;
+        } else {
+            float smoothed = last_percent + config.smoothing_alpha * (percent - last_percent);
+            last_percent = static_cast<uint8_t>(smoothed);
+        }
+    } else {
+        last_percent = percent;
+    }
+
+    ui_charging = (charging == 1);
+    ui_full = (full == 1);
+
+    auto newState = evaluateState(last_voltage, last_percent, charging, full);
+    publishIfChanged(newState);
+}
+
+
+state::PowerState PowerManager::evaluateState(float volt,
+                                             uint8_t percent,
+                                             int chargingStatus,
+                                             int fullStatus)
 {
-    if(new_state == current_state_) return;
-    current_state_ = new_state;
-    ESP_LOGI(TAG, "PowerState -> %d", static_cast<int>(new_state));
+    // FULL takes priority
+    if (fullStatus == 1) {
+        return state::PowerState::FULL_BATTERY;
+    }
+
+    // CHARGING takes next priority
+    if (chargingStatus == 1) {
+        return state::PowerState::CHARGING;
+    }
+
+    // CRITICAL battery
+    if (percent <= config.critical_percent) {
+        return state::PowerState::CRITICAL;
+    }
+
+    // LOW battery
+    if (percent <= config.low_battery_percent) {
+        return state::PowerState::LOW_BATTERY;
+    }
+
+    return state::PowerState::NORMAL;
+}
+
+void PowerManager::publishIfChanged(state::PowerState new_state) {
+    if (new_state == current_state) return;
+
+    current_state = new_state;
+
+    ESP_LOGI(TAG, "PowerState -> %d (Volt: %.2fV %%:%d CHG:%d FULL:%d)",
+             (int)new_state,
+             last_voltage,
+             last_percent,
+             ui_charging,
+             ui_full);
+
     StateManager::instance().setPowerState(new_state);
-}
-
-void PowerManager::evaluate()
-{
-    uint8_t percent = power_.getBatteryPercent();
-    uint8_t charging = power_.isCharging();
-    uint8_t full = power_.isFull();
-
-    // PRIORITY DECISION
-    if (full == 1) {
-        setState(state::PowerState::FULL_BATTERY);
-        return;
-    }
-
-    if (charging == 1) {
-        setState(state::PowerState::CHARGING);
-        return;
-    }
-
-    if (percent == BATTERY_INVALID) {
-        setState(state::PowerState::LOW_BATTERY);
-        return;
-    }
-
-    if (percent <= low_batt_threshold_) {
-        setState(state::PowerState::LOW_BATTERY);
-        return;
-    }
-
-    setState(state::PowerState::NORMAL);
 }

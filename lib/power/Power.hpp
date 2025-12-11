@@ -18,6 +18,7 @@ private:
 
     float R1_, R2_;
 
+    // internal raw read
     float readVoltage();
     uint8_t voltageToPercent(float v);
 
@@ -31,8 +32,10 @@ public:
     Power(adc1_channel_t adc_channel, float R1, float R2)
     : Power(adc_channel, GPIO_NUM_NC, GPIO_NUM_NC, R1, R2) {}
 
-    
     ~Power() = default;
+
+    // Public: expose voltage to PowerManager/UI
+    float getVoltage() { return readVoltage(); }
 
     // Return 0–100% valid OR BATTERY_INVALID (255)
     uint8_t getBatteryPercent();

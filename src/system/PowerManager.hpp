@@ -1,29 +1,67 @@
 #pragma once
 #include <cstdint>
-#include "../../lib/power/Power.hpp"
+#include "StateTypes.hpp"
 #include "StateManager.hpp"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "freertos/timers.h"
+
+class Power;
 
 class PowerManager {
 public:
-    PowerManager(Power& power, uint8_t low_battery_threshold = 20);
+    struct Config {
+        uint32_t evaluate_interval_ms = 2000;
+        float low_battery_percent = 20.0f;
+        float critical_percent = 8.0f;
+        bool enable_smoothing = true;
+        float smoothing_alpha = 0.15f;
+    };
+
+public:
+    PowerManager(Power* power, const Config& cfg);
     ~PowerManager();
 
-    // auto create task
-    void startTask(uint32_t interval_ms = 2000);
-    void stopTask();
+    bool init();
+    void start();
+    void stop();
+
+    // === UI Query API ===
+    uint8_t getPercent() const { return last_percent; }
+    float getVoltage() const { return last_voltage; }
+    state::PowerState getState() const { return current_state; }
+
+    bool isCharging() const { return ui_charging; }
+    bool isFull() const { return ui_full; }
+    bool isBatteryPresent() const { return battery_present; }
 
 private:
-    Power& power_;
-    uint8_t low_batt_threshold_;
-    TaskHandle_t task_handle_ = nullptr;
-    state::PowerState current_state_ = state::PowerState::NORMAL;
-    uint32_t interval_tick_ = 2000 / portTICK_PERIOD_MS;
+    static void timerCallbackStatic(TimerHandle_t timer);
+    void timerCallback();
 
-    void taskLoop();
-    static void taskEntry(void* param);
+    state::PowerState evaluateState(float volt,
+                                    uint8_t percent,
+                                    int chargingStatus,
+                                    int fullStatus);
 
-    void setState(state::PowerState new_state);
-    void evaluate();     // internal check logic
+    void publishIfChanged(state::PowerState st);
+
+    uint8_t applySmoothing(uint8_t percent);
+
+private:
+    Power* power;
+    Config config;
+    TimerHandle_t timer = nullptr;
+    bool started = false;
+
+    // cache
+    float last_voltage = 0.0f;
+    uint8_t last_percent = 0;
+    state::PowerState current_state = state::PowerState::NORMAL;
+
+    // keep flags for UI-friendly getters
+    bool ui_charging = false;
+    bool ui_full = false;
+    bool battery_present = true;
+
+    bool first_sample = true;
 };
