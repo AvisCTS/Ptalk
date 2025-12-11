@@ -1,143 +1,99 @@
 #pragma once
-
-#include <cstdint>
-#include <string>
-
-// Core modules
+#include <memory>
+#include <atomic>
 #include "system/StateManager.hpp"
-// #include "Display.hpp"
-// #include "DisplayAnimator.hpp"
-
-// Added: Power Manager
-#include "system/PowerManager.hpp"
-
-// TODO: include network/audio when ready
-// #include "WifiManager.hpp"
-// #include "WebSocketClient.hpp"
-// #include "AudioManager.hpp"
-
-// TODO: include UI logic
-// #include "UIStateController.hpp"
-
-// FreeRTOS
+#include "system/StateTypes.hpp"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 
-/*
-===============================================================================
-  AppController – Central Orchestrator for the Entire System
-===============================================================================
+// Optional External Messages / Intent / Commands (Key future extensibility)
+namespace event {
+enum class AppEvent : uint8_t {
+    USER_BUTTON,               // UI physical press
+    WAKEWORD_DETECTED,         // Wakeword engine triggers
+    SERVER_FORCE_LISTEN,       // Remote control command
+    SERVER_PROCESSING_START,
+    SERVER_TTS_END,
+    MIC_STREAM_TIMEOUT,
+    OTA_BEGIN,
+    OTA_FINISHED,
+    POWER_LOW,
+    POWER_RECOVER,
+    CANCEL_REQUEST,
+    SLEEP_REQUEST,
+    WAKE_REQUEST
+};
+}
 
-Responsibilities:
- - Create and initialize all modules
- - Start their FreeRTOS tasks on the correct cores
- - Bind StateManager updates → UI / Display / Power / Network
- - Apply system rules (boot sequence, idle policy, sleep policy)
- - Initialize and manage low-power mode transitions via PowerManager
+class NetworkManager;      // WiFi + WebSocket
+class AudioManager;        // Mic / Speaker
+class DisplayAnimator;     // UI / Animation
+class PowerManager;        // Battery & power strategy
+class TouchInput;          // Buttons or Touch Sensor
+class OTAUpdater;          // Firmware update
+class ConfigManager;       // Configuration, NVS
 
-Modules managed here:
- - Display + DisplayAnimator
- - PowerManager (new)
- - Network modules (WiFi + WS)
- - Audio subsystem (Mic, VAD, Speaker)
- - UI logic (UIStateController)
- - StateManager (central event bus)
-
-===============================================================================
-*/
-
+/**
+ * AppController:
+ * - Central coordinator
+ * - Translate State + Event to Actions
+ * - Completely independent from hardware driver
+ */
 class AppController {
 public:
-    AppController();
-    ~AppController();
+    static AppController& instance();
 
-    // ========================================================================
-    // SYSTEM INIT
-    // ========================================================================
-    
-    // Initialize everything (called from app_main)
-    bool begin();
+    // ======= Lifecycle control =======
+    bool init();     // create modules, subscribe state callback
+    void start();    // create task
+    void stop();     // future
 
-    // ========================================================================
-    // TASK STARTERS
-    // ========================================================================
+    // ======= External Actions =======
+    void reboot();
+    void enterSleep();
+    void wake();
+    void factoryReset();
 
-    // Display Animator task (core 1 recommended)
-    void startDisplayAnimatorTask(
-        UBaseType_t priority = 4,
-        uint32_t stack = 4096,
-        BaseType_t core = 1
-    );
-
-    // UI logic task (optional)
-    void startUITask(
-        UBaseType_t priority = 3,
-        uint32_t stack = 4096,
-        BaseType_t core = 1
-    );
-
-    // Network management task
-    void startNetworkTask(
-        UBaseType_t priority = 3,
-        uint32_t stack = 4096,
-        BaseType_t core = 0
-    );
-
-    // Audio processing (mic, encoder, vad, speaker)
-    void startAudioTask(
-        UBaseType_t priority = 4,
-        uint32_t stack = 4096,
-        BaseType_t core = 0
-    );
-
-    // Power management task (optional)
-    void startPowerTask(
-        UBaseType_t priority = 3,
-        uint32_t stack = 4096,
-        BaseType_t core = 0
-    );
+    // ======= Post application-level event to queue =======
+    void postEvent(event::AppEvent evt);
 
 private:
-    // ========================================================================
-    // INTERNAL HELPERS
-    // ========================================================================
+    AppController() = default;
+    ~AppController() = default;
+    AppController(const AppController&) = delete;
+    AppController& operator=(const AppController&) = delete;
 
-    void loadConfig();
-    void loadAnimations();
-    void attachStateObservers();     // attach to PowerManager, Animator, UI
+    // ======= Task Loop =======
+    static void controllerTask(void* param);
+    void processQueue();
 
-    // ========================================================================
-    // MODULE INSTANCES
-    // ========================================================================
+    // ======= State callbacks =======
+    void onInteractionStateChanged(state::InteractionState, state::InputSource);
+    void onConnectivityStateChanged(state::ConnectivityState);
+    void onSystemStateChanged(state::SystemState);
+    void onPowerStateChanged(state::PowerState);
 
-    Display* display = nullptr;
-    DisplayAnimator* animator = nullptr;
+private:
+    // ======= Subscription ID =======
+    int sub_inter_id = -1;
+    int sub_conn_id = -1;
+    int sub_sys_id  = -1;
+    int sub_power_id = -1;
 
-    // NEW: Power manager for sleep / brightness / power control
-    PowerManager* power = nullptr;
+    // ======= Module pointers =======
+    std::unique_ptr<NetworkManager> network;
+    std::unique_ptr<AudioManager> audio;
+    std::unique_ptr<DisplayAnimator> display;
+    std::unique_ptr<PowerManager> power;
+    std::unique_ptr<ConfigManager> config;
+    std::unique_ptr<OTAUpdater> ota;
+    std::unique_ptr<TouchInput> touch;
 
-    // TODO: UI
-    // UIStateController* ui = nullptr;
+    // ======= Task & Queue =======
+    QueueHandle_t app_queue = nullptr;
+    TaskHandle_t app_task = nullptr;
 
-    // TODO: Network
-    // WifiManager* wifi = nullptr;
-    // WebSocketClient* ws = nullptr;
-
-    // TODO: Audio
-    // AudioManager* audio = nullptr;
-
-    // Global State Manager
-    StateManager& state = StateManager::instance();
-
-    // ========================================================================
-    // TASK HANDLES
-    // ========================================================================
-    
-    TaskHandle_t taskDisplayAnimator = nullptr;
-    TaskHandle_t taskUI = nullptr;
-    TaskHandle_t taskNetwork = nullptr;
-    TaskHandle_t taskAudio = nullptr;
-    TaskHandle_t taskPower = nullptr;   // NEW
+    // ======= Internal state =======
+    std::atomic<bool> started {false};
 };
-
