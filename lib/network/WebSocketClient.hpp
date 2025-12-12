@@ -3,73 +3,54 @@
 #include <string>
 #include <functional>
 #include <vector>
-#include <cstdint>
-
 #include "esp_websocket_client.h"
-#include "esp_event.h"
-#include "esp_log.h"
-
 
 /**
  * WebSocketClient
- * --------------------------
- *  - Thin wrapper around esp_websocket_client
- *  - Provides clean callbacks:
- *       status: 0=DISCONNECTED, 1=CONNECTING, 2=CONNECTED
- *       text message
- *       binary message
+ * ---------------------------------------------------------
+ * - Đóng gói esp_websocket_client
+ * - Tự động callback status / text / binary
+ * - Không xử lý logic ứng dụng (NetworkManager làm việc đó)
  */
 class WebSocketClient {
 public:
     WebSocketClient();
     ~WebSocketClient();
 
-    // ----------------------------------------------------------------------
-    // Connection control
-    // ----------------------------------------------------------------------
-    bool connect(const std::string& url);
-    void disconnect();
-    bool isConnected() const { return connected_; }
+    // Init sơ bộ, chưa connect
+    void init();
 
-    // ----------------------------------------------------------------------
-    // Sending data
-    // ----------------------------------------------------------------------
-    bool sendText(const std::string& text);
+    // Kết nối tới ws_url (thiết lập trong setUrl)
+    void connect();
+    void close();
+
+    void setUrl(const std::string& url);
+
+    // Send
+    bool sendText(const std::string& msg);
     bool sendBinary(const uint8_t* data, size_t len);
 
-    // ----------------------------------------------------------------------
-    // Callback setters
-    // ----------------------------------------------------------------------
-    // status: 0=DISCONNECTED, 1=CONNECTING, 2=CONNECTED
-    void onStatus(std::function<void(int)> cb) { status_cb_ = cb; }
-
-    // text message callback
-    void onTextMessage(std::function<void(const std::string&)> cb) { text_cb_ = cb; }
-
-    // binary message callback
-    void onBinaryMessage(std::function<void(const uint8_t*, size_t)> cb) { bin_cb_ = cb; }
+    // Callbacks
+    void onStatus(std::function<void(int)> cb);   // 0=closed,1=connecting,2=open
+    void onText(std::function<void(const std::string&)> cb);
+    void onBinary(std::function<void(const uint8_t*, size_t)> cb);
 
 private:
-    // Internal event handler
-    static void wsEventHandler(void* handler_args,
-                               esp_event_base_t base,
-                               int32_t event_id,
-                               void* event_data);
+    static void eventHandlerStatic(void* handler_args, esp_event_base_t base,
+                                   int32_t event_id, void* event_data);
 
-    // Dispatchers
-    void handleConnected();
-    void handleDisconnected();
-    void handleTextMessage(const char* data, size_t len);
-    void handleBinaryMessage(const uint8_t* data, size_t len);
+    void eventHandler(esp_event_base_t base, int32_t event_id,
+                      esp_websocket_event_data_t* data);
 
 private:
-    esp_websocket_client_handle_t ws_ = nullptr;
-    bool connected_ = false;
+    esp_websocket_client_handle_t client = nullptr;
 
-    std::string current_url_;
+    std::string ws_url;
+
+    bool connected = false;
 
     // callbacks
-    std::function<void(int)> status_cb_;
-    std::function<void(const std::string&)> text_cb_;
-    std::function<void(const uint8_t*, size_t)> bin_cb_;
+    std::function<void(int)> status_cb;               // status
+    std::function<void(const std::string&)> text_cb;  // text message
+    std::function<void(const uint8_t*, size_t)> binary_cb; // binary message
 };

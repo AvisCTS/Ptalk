@@ -1,5 +1,4 @@
 #pragma once
-
 #include <memory>
 #include <string>
 #include <atomic>
@@ -8,75 +7,97 @@
 #include "system/StateTypes.hpp"
 #include "system/StateManager.hpp"
 
-// Forward declarations
-#include "WifiService.hpp"
-#include "WebSocketClient.hpp"
-// class WifiService;
-// class WebSocketClient;
+class WifiService;         // Low-level WiFi
+class WebSocketClient;     // Low-level WebSocket
 
 /**
  * NetworkManager
- * ---------------------------------------
- * - Quản lý 2 lớp thấp: WifiService + WebSocketClient
- * - Không xử lý dữ liệu WS (AppController sẽ làm)
- * - Không chứa logic UI hoặc logic business
- * - Trả trạng thái về StateManager (ConnectivityState)
- *
- * ConnectivityState mapping:
- *   OFFLINE
- *   CONNECTING_WIFI
- *   WIFI_PORTAL
- *   CONNECTING_WS
- *   ONLINE
+ * -------------------------------------------------------------------
+ * Nhiệm vụ:
+ *  - Điều phối WiFi → WebSocket
+ *  - Publish ConnectivityState lên StateManager
+ *  - Cầu nối WebSocket ↔ AppController (nhận text/binary message)
+ *  - Quyết định retry logic của WebSocket (không để trong WS driver)
+ * 
+ * Không làm:
+ *  - Không scan wifi
+ *  - Không xử lý portal HTML
+ *  - Không chứa logic kết nối driver-level
  */
-class NetworkManager {
+class NetworkManager
+{
 public:
     NetworkManager();
     ~NetworkManager();
 
-    // Initialize WifiService + WebSocketClient
+    // ======================================================
+    // INIT / START / STOP
+    // ======================================================
     bool init();
-
-    // Start WiFi + WebSocket lifecycle
     void start();
-
-    // Stop everything
     void stop();
 
-    // Called periodically by AppController (20–50ms)
+    // ======================================================
+    // External API
+    // ======================================================
+
+    /// Cập nhật mỗi chu kỳ AppController loop
     void update(uint32_t dt_ms);
 
-    // Set credentials (WiFi only)
+    /// Gán lại credentials khi user submit portal
     void setCredentials(const std::string& ssid, const std::string& pass);
 
-    // Access raw modules (advanced integrations)
-    WifiService* wifi() { return wifi_service.get(); }
-    WebSocketClient* ws() { return ws_client.get(); }
+    /// Gửi message lên server
+    bool sendText(const std::string& text);
+    bool sendBinary(const uint8_t* data, size_t len);
+
+    /// Callback khi server gửi text message
+    void onServerText(std::function<void(const std::string&)> cb);
+
+    /// Callback khi server gửi binary
+    void onServerBinary(std::function<void(const uint8_t*, size_t)> cb);
 
 private:
-    // Handle WiFi callbacks (status_code from WifiService)
-    void handleWifiStatus(int status);
+    // ======================================================
+    // Internal handlers
+    // ======================================================
+    void handleWifiStatus(int status_code);
+    void handleWsStatus(int status_code);
 
-    // Handle WS callbacks
-    void handleWsStatus(int status);
+    // Receive message from WebSocketClient
+    void handleWsTextMessage(const std::string& msg);
+    void handleWsBinaryMessage(const uint8_t* data, size_t len);
 
-    // StateManager helper
+    // Push connectivity state lên StateManager
     void publishState(state::ConnectivityState s);
 
-    // Internal: Start WS after WiFi connection
-    void tryStartWebSocket();
-
 private:
-    // Modules
-    std::unique_ptr<WifiService> wifi_service;
-    std::unique_ptr<WebSocketClient> ws_client;
+    // ======================================================
+    // Components
+    // ======================================================
+    std::unique_ptr<WifiService> wifi;
+    std::unique_ptr<WebSocketClient> ws;
 
-    // Internal flags
-    bool started = false;
-    bool ws_should_run = false;
-    bool ws_running = false;
+    // ======================================================
+    // Runtime flags
+    // ======================================================
+    std::atomic<bool> started {false};
 
-    // For timing / reconnection logic
-    uint32_t tick_ms = 0;
+    // WiFi status flags
+    bool wifi_ready = false;      // đã có IP hay chưa
+
+    // WS runtime control
+    bool ws_should_run = false;   // Manager muốn WS chạy
+    bool ws_running    = false;   // WS thực sự open chưa
+
+    // Retry timer (ms)
     uint32_t ws_retry_timer = 0;
+
+    uint32_t tick_ms = 0;
+
+    // ======================================================
+    // App-level callbacks
+    // ======================================================
+    std::function<void(const std::string&)> on_text_cb = nullptr;
+    std::function<void(const uint8_t*, size_t)> on_binary_cb = nullptr;
 };

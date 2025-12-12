@@ -7,73 +7,90 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
+#include "esp_err.h"
 
+/**
+ * WifiInfo
+ * ---------------------------------------------------------
+ * - Kết quả scan wifi
+ */
 struct WifiInfo {
     std::string ssid;
-    int rssi;
+    int rssi = -99;
 };
 
+/**
+ * WifiService
+ * ---------------------------------------------------------
+ * - Init WiFi stack (NVS, netif, wifi driver)
+ * - Auto-connect STA nếu có credentials
+ * - Nếu không → mở Captive Portal
+ * - Cung cấp scan WiFi
+ * - Callback khi WiFi CONNECTING / CONNECTED / DISCONNECTED
+ */
 class WifiService {
 public:
-    static WifiService& instance();
+    WifiService() = default;
+    ~WifiService() = default;
 
-    // ======================================================
-    // Core API
-    // ======================================================
-    bool init();                 // NVS + WiFi driver + event loop + netif
-    bool autoConnect();          // Connect using saved credential
-    void connectWithCredentials(const char* ssid, const char* pass);
+    // Init WiFi môi trường (NVS, netif, event loop)
+    void init();
 
-    void startCaptivePortal();   // Show your existing HTML portal
+    // Bắt đầu auto-connect STA (return false nếu không có SSID/PASS)
+    bool autoConnect();
+
+    // Bật portal
+    void startCaptivePortal(const std::string& ap_ssid = "PTalk",const uint8_t ap_num_connections = 4);
     void stopCaptivePortal();
+
+    // Ngắt STA
     void disconnect();
+
+    // Tắt auto reconnect (theo yêu cầu người dùng)
     void disableAutoConnect();
 
-    // ======================================================
-    // Query
-    // ======================================================
-    bool isConnected() const { return wifi_connected; }
+    // Trạng thái
+    bool isConnected() const { return connected; }
     std::string getIp() const;
     std::string getSsid() const { return sta_ssid; }
-    std::string getPassword() const { return sta_pass; }
-
-    void scanNetworks(std::vector<WifiInfo>& out);
-
-    // ======================================================
-    // Callbacks → NetworkManager will catch these
-    // Status: 0 = DISCONNECTED, 1 = CONNECTING, 2 = GOT_IP
-    // ======================================================
-    void onStatus(std::function<void(int)> cb) { status_callback = cb; }
-
-private:
-    WifiService() = default;
 
     // Credential
+    void connectWithCredentials(const char* ssid, const char* pass);
+
+    // Scan WiFi
+    std::vector<WifiInfo> scanNetworks();
+
+    // Callback status: 0=DISCONNECTED, 1=CONNECTING, 2=GOT_IP
+    void onStatus(std::function<void(int)> cb) { status_cb = cb; }
+
+private:
     void loadCredentials();
     void saveCredentials(const char* ssid, const char* pass);
-
-    // WiFi actions
     void startSTA();
     void registerEvents();
 
     // Event handlers
-    static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, void* data);
-    static void ip_event_handler(void* arg, esp_event_base_t base, int32_t id, void* data);
+    static void wifiEventHandlerStatic(void* arg, esp_event_base_t base,
+                                      int32_t id, void* data);
+
+    static void ipEventHandlerStatic(void* arg, esp_event_base_t base,
+                                     int32_t id, void* data);
+
+    void wifiEventHandler(esp_event_base_t base, int32_t id, void* data);
+    void ipEventHandler(esp_event_base_t base, int32_t id, void* data);
 
 private:
-    // WiFi state
     std::string sta_ssid;
     std::string sta_pass;
 
+    bool connected = false;
     bool auto_connect_enabled = true;
-    bool wifi_connected = false;
     bool portal_running = false;
 
     esp_netif_t* sta_netif = nullptr;
     esp_netif_t* ap_netif = nullptr;
 
-    httpd_handle_t portal_server = nullptr;
+    httpd_handle_t http_server = nullptr;
 
-    // Callback to NetworkManager
-    std::function<void(int)> status_callback = nullptr;
+    std::function<void(int)> status_cb = nullptr;
 };

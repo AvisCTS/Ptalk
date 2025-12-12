@@ -1,6 +1,7 @@
 #include "NetworkManager.hpp"
 #include "WifiService.hpp"
 #include "WebSocketClient.hpp"
+
 #include "esp_log.h"
 
 static const char* TAG = "NetworkManager";
@@ -11,49 +12,56 @@ NetworkManager::~NetworkManager() {
     stop();
 }
 
-// ========================================================
+// ============================================================================
 // INIT
-// ========================================================
+// ============================================================================
 bool NetworkManager::init()
 {
     ESP_LOGI(TAG, "Init NetworkManager");
 
-    wifi_service = std::make_unique<WifiService>();
-    ws_client    = std::make_unique<WebSocketClient>();
+    wifi = std::make_unique<WifiService>();
+    ws   = std::make_unique<WebSocketClient>();
 
-    if (!wifi_service) {
-        ESP_LOGE(TAG, "WifiService alloc failed");
-        return false;
-    }
-    if (!ws_client) {
-        ESP_LOGE(TAG, "WebSocketClient alloc failed");
+    if (!wifi || !ws) {
+        ESP_LOGE(TAG, "Failed to allocate WifiService or WebSocketClient");
         return false;
     }
 
-    wifi_service->init();
-    ws_client->init();
+    wifi->init();
+    ws->init();
 
-    // --------------------------
-    // WiFi callback
-    // --------------------------
-    wifi_service->onStatus([this](int status_code){
-        this->handleWifiStatus(status_code);
+    // --------------------------------------------------------------------
+    // WiFi Status Callback
+    // --------------------------------------------------------------------
+    wifi->onStatus([this](int status){
+        this->handleWifiStatus(status);
     });
 
-    // --------------------------
-    // WS callback
-    // --------------------------
-    ws_client->onStatus([this](int status_code){
-        this->handleWsStatus(status_code);
+    // --------------------------------------------------------------------
+    // WebSocket Status Callback
+    // --------------------------------------------------------------------
+    ws->onStatus([this](int status){
+        this->handleWsStatus(status);
+    });
+
+    // --------------------------------------------------------------------
+    // WebSocket Message Callbacks
+    // --------------------------------------------------------------------
+    ws->onText([this](const std::string& msg){
+        this->handleWsTextMessage(msg);
+    });
+
+    ws->onBinary([this](const uint8_t* data, size_t len){
+        this->handleWsBinaryMessage(data, len);
     });
 
     ESP_LOGI(TAG, "NetworkManager init OK");
     return true;
 }
 
-// ========================================================
+// ============================================================================
 // START / STOP
-// ========================================================
+// ============================================================================
 void NetworkManager::start()
 {
     if (started) return;
@@ -61,8 +69,7 @@ void NetworkManager::start()
 
     ESP_LOGI(TAG, "NetworkManager start()");
 
-    // Start WiFi auto connect
-    wifi_service->autoConnect();
+    wifi->autoConnect();
 
     publishState(state::ConnectivityState::CONNECTING_WIFI);
 }
@@ -74,70 +81,103 @@ void NetworkManager::stop()
 
     ESP_LOGW(TAG, "NetworkManager stop()");
 
-    if (ws_client) ws_client->close();
-    if (wifi_service) wifi_service->disconnect();
+    ws_should_run = false;
+    ws_running = false;
+
+    if (ws) ws->close();
+    if (wifi) wifi->disconnect();
 }
 
-// ========================================================
-// Set credentials
-// ========================================================
-void NetworkManager::setCredentials(const std::string& ssid, const std::string& pass)
-{
-    if (wifi_service) {
-        wifi_service->connectWithCredentials(ssid.c_str(), pass.c_str());
-    }
-}
+// ============================================================================
+// UPDATE LOOP
+// ============================================================================
 
-// ========================================================
-// MAIN UPDATE LOOP
-// ========================================================
 void NetworkManager::update(uint32_t dt_ms)
 {
     if (!started) return;
 
     tick_ms += dt_ms;
 
-    // ----------------------------------------------------
-    // Try to start WS after WiFi ready
-    // ----------------------------------------------------
+    // --------------------------------------------------------------------
+    // Retry WebSocket nếu WiFi đã kết nối
+    // --------------------------------------------------------------------
     if (ws_should_run && !ws_running)
     {
         if (ws_retry_timer > 0) {
-            ws_retry_timer = (ws_retry_timer > dt_ms) ? ws_retry_timer - dt_ms : 0;
+            ws_retry_timer = (ws_retry_timer > dt_ms) ? (ws_retry_timer - dt_ms) : 0;
             return;
         }
 
-        ESP_LOGI(TAG, "Trying to connect WebSocket...");
+        ESP_LOGI(TAG, "NetworkManager → Trying WebSocket connect...");
         publishState(state::ConnectivityState::CONNECTING_WS);
 
-        ws_client->connect();
+        ws->connect();
 
-        // Prevent spamming
-        ws_retry_timer = 2000;
+        ws_retry_timer = 2000;  // chống spam connect
     }
 }
 
-// ========================================================
-// HANDLE WIFI STATUS
-// ========================================================
+// ============================================================================
+// SET CREDENTIALS
+// ============================================================================
+void NetworkManager::setCredentials(const std::string& ssid, const std::string& pass)
+{
+    if (wifi) {
+        wifi->connectWithCredentials(ssid.c_str(), pass.c_str());
+    }
+}
+
+// ============================================================================
+// SEND MESSAGE TO WS
+// ============================================================================
+bool NetworkManager::sendText(const std::string& text)
+{
+    if (!ws_running) return false;
+    return ws->sendText(text);
+}
+
+bool NetworkManager::sendBinary(const uint8_t* data, size_t len)
+{
+    if (!ws_running) return false;
+    return ws->sendBinary(data, len);
+}
+
+// ============================================================================
+// CALLBACK REGISTRATION
+// ============================================================================
+void NetworkManager::onServerText(std::function<void(const std::string&)> cb)
+{
+    on_text_cb = cb;
+}
+
+void NetworkManager::onServerBinary(std::function<void(const uint8_t*, size_t)> cb)
+{
+    on_binary_cb = cb;
+}
+
+// ============================================================================
+// WIFI STATUS HANDLER
+// ============================================================================
+//
+// WifiService status code:
+//   0 = DISCONNECTED
+//   1 = CONNECTING
+//   2 = GOT_IP
+//
 void NetworkManager::handleWifiStatus(int status)
 {
-    // status:
-    // 0 = disconnected
-    // 1 = connecting
-    // 2 = got ip
-
     switch (status)
     {
     case 0: // DISCONNECTED
         ESP_LOGW(TAG, "WiFi → DISCONNECTED");
 
+        wifi_ready = false;
+
         ws_should_run = false;
         ws_running = false;
-        if (ws_client) ws_client->close();
+        ws->close();
 
         publishState(state::ConnectivityState::OFFLINE);
-
         break;
 
     case 1: // CONNECTING
@@ -148,24 +188,26 @@ void NetworkManager::handleWifiStatus(int status)
     case 2: // GOT_IP
         ESP_LOGI(TAG, "WiFi → GOT_IP");
 
-        publishState(state::ConnectivityState::CONNECTING_WS);
-
+        wifi_ready = true;
         ws_should_run = true;
-        ws_retry_timer = 10; // connect WS asap
+        ws_retry_timer = 10; // connect WS sớm nhất có thể
+
+        publishState(state::ConnectivityState::CONNECTING_WS);
         break;
     }
 }
 
-// ========================================================
-// HANDLE WS STATUS
-// ========================================================
+// ============================================================================
+// WEBSOCKET STATUS HANDLER
+// ============================================================================
+//
+// WebSocketClient status code:
+//   0 = CLOSED
+//   1 = CONNECTING
+//   2 = OPEN
+//
 void NetworkManager::handleWsStatus(int status)
 {
-    // WebSocket status:
-    // 0 = CLOSED
-    // 1 = CONNECTING
-    // 2 = OPEN
-
     switch (status)
     {
     case 0: // CLOSED
@@ -173,8 +215,7 @@ void NetworkManager::handleWsStatus(int status)
         ws_running = false;
 
         if (ws_should_run) {
-            // Retry WS again later
-            ws_retry_timer = 1500;
+            ws_retry_timer = 1500;  // retry nhẹ nhàng
             publishState(state::ConnectivityState::CONNECTING_WS);
         } else {
             publishState(state::ConnectivityState::OFFLINE);
@@ -187,16 +228,31 @@ void NetworkManager::handleWsStatus(int status)
         break;
 
     case 2: // OPEN
-        ESP_LOGI(TAG, "WS → ONLINE");
+        ESP_LOGI(TAG, "WS → OPEN");
         ws_running = true;
         publishState(state::ConnectivityState::ONLINE);
         break;
     }
 }
 
-// ========================================================
-// HELPER: Push state to StateManager
-// ========================================================
+// ============================================================================
+// MESSAGE FROM WEBSOCKET
+// ============================================================================
+void NetworkManager::handleWsTextMessage(const std::string& msg)
+{
+    ESP_LOGI(TAG, "WS Text Message: %s", msg.c_str());
+    if (on_text_cb) on_text_cb(msg);
+}
+
+void NetworkManager::handleWsBinaryMessage(const uint8_t* data, size_t len)
+{
+    ESP_LOGI(TAG, "WS Binary Message (%zu bytes)", len);
+    if (on_binary_cb) on_binary_cb(data, len);
+}
+
+// ============================================================================
+// PUSH STATE TO STATEMANAGER
+// ============================================================================
 void NetworkManager::publishState(state::ConnectivityState s)
 {
     StateManager::instance().setConnectivityState(s);
