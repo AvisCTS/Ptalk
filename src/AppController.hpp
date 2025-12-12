@@ -9,6 +9,7 @@
 
 #include "system/DisplayManager.hpp"
 #include "system/PowerManager.hpp"
+#include "system/NetworkManager.hpp"
 
 // Optional External Messages / Intent / Commands (Key future extensibility)
 namespace event {

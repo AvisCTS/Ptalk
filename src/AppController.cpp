@@ -46,7 +46,7 @@ bool AppController::init() {
 
     // TODO: Khởi tạo các module tầng dưới (tuỳ bạn implement)
     // Ví dụ:
-    // network = std::make_unique<NetworkManager>();
+    network = std::make_unique<NetworkManager>();
     // audio   = std::make_unique<AudioManager>();
     display = std::make_unique<DisplayManager>();
     power   = std::make_unique<PowerManager>();
