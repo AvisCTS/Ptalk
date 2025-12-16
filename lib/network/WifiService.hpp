@@ -86,6 +86,7 @@ private:
     bool connected = false;
     bool auto_connect_enabled = true;
     bool portal_running = false;
+    bool has_connected_once = false;  // Track if WiFi ever connected successfully
 
     esp_netif_t* sta_netif = nullptr;
     esp_netif_t* ap_netif = nullptr;

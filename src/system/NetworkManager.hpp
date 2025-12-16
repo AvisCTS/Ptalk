@@ -4,6 +4,9 @@
 #include <atomic>
 #include <functional>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "system/StateTypes.hpp"
 #include "system/StateManager.hpp"
 
@@ -31,9 +34,27 @@ public:
     ~NetworkManager();
 
     // ======================================================
+    // Configuration
+    // ======================================================
+    struct Config {
+        // Wi‑Fi station credentials (optional). If empty → use saved or portal
+        std::string sta_ssid;            // target Wi‑Fi SSID
+        std::string sta_pass;            // target Wi‑Fi password
+
+        // Captive portal (AP) fallback settings
+        std::string ap_ssid = "PTalk";  // AP SSID when opening portal
+        uint8_t     ap_max_clients = 4;  // limit number of AP clients
+
+        // WebSocket server endpoint
+        std::string ws_url;              // e.g. ws://192.168.1.100:8080/ws
+    };
+
+    // ======================================================
     // INIT / START / STOP
     // ======================================================
     bool init();
+    // Init with configuration (preferred)
+    bool init(const Config& cfg);
     void start();
     void stop();
 
@@ -46,6 +67,11 @@ public:
 
     /// Gán lại credentials khi user submit portal
     void setCredentials(const std::string& ssid, const std::string& pass);
+
+    // Runtime config setters (optional, can be used before start)
+    void setWsUrl(const std::string& url);
+    void setApSsid(const std::string& apSsid);
+    void setDeviceLimit(uint8_t maxClients);
 
     /// Gửi message lên server
     bool sendText(const std::string& text);
@@ -71,12 +97,23 @@ private:
     // Push connectivity state lên StateManager
     void publishState(state::ConnectivityState s);
 
+    static void taskEntry(void* arg);
+
+private:
+    TaskHandle_t task_handle = nullptr;
+    uint32_t update_interval_ms = 33; // ~30 FPS tick
+
 private:
     // ======================================================
     // Components
     // ======================================================
     std::unique_ptr<WifiService> wifi;
     std::unique_ptr<WebSocketClient> ws;
+
+    // ======================================================
+    // Config storage
+    // ======================================================
+    Config config_{}; // holds init-time configuration
 
     // ======================================================
     // Runtime flags

@@ -30,6 +30,11 @@ bool NetworkManager::init()
     wifi->init();
     ws->init();
 
+    // Apply configured WS URL if provided
+    if (!config_.ws_url.empty()) {
+        ws->setUrl(config_.ws_url);
+    }
+
     // --------------------------------------------------------------------
     // WiFi Status Callback
     // --------------------------------------------------------------------
@@ -59,6 +64,13 @@ bool NetworkManager::init()
     return true;
 }
 
+// Overload: init with configuration
+bool NetworkManager::init(const Config& cfg)
+{
+    config_ = cfg;
+    return init();
+}
+
 // ============================================================================
 // START / STOP
 // ============================================================================
@@ -69,9 +81,37 @@ void NetworkManager::start()
 
     ESP_LOGI(TAG, "NetworkManager start()");
 
-    wifi->autoConnect();
+    // Prefer explicit credentials if provided in config
+    if (!config_.sta_ssid.empty() && !config_.sta_pass.empty()) {
+        wifi->connectWithCredentials(config_.sta_ssid.c_str(), config_.sta_pass.c_str());
+        publishState(state::ConnectivityState::CONNECTING_WIFI);
+    } else {
+        // Try auto-connect (saved creds). If not available, start portal.
+        bool autoOk = wifi->autoConnect();
+        if (!autoOk) {
+            wifi->startCaptivePortal(config_.ap_ssid, config_.ap_max_clients);
+            publishState(state::ConnectivityState::WIFI_PORTAL);
+        } else {
+            publishState(state::ConnectivityState::CONNECTING_WIFI);
+        }
+    }
 
-    publishState(state::ConnectivityState::CONNECTING_WIFI);
+    // Spawn internal update task so callers don't need to tick manually
+    if (task_handle == nullptr) {
+        BaseType_t rc = xTaskCreatePinnedToCore(
+            &NetworkManager::taskEntry,
+            "NetworkLoop",
+            8192,  // Increased from 4096 to prevent stack overflow
+            this,
+            3,
+            &task_handle,
+            tskNO_AFFINITY
+        );
+        if (rc != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create NetworkLoop task (%d)", (int)rc);
+            task_handle = nullptr;
+        }
+    }
 }
 
 void NetworkManager::stop()
@@ -86,6 +126,12 @@ void NetworkManager::stop()
 
     if (ws) ws->close();
     if (wifi) wifi->disconnect();
+
+    if (task_handle) {
+        TaskHandle_t th = task_handle;
+        task_handle = nullptr;
+        vTaskDelete(th);
+    }
 }
 
 // ============================================================================
@@ -111,9 +157,37 @@ void NetworkManager::update(uint32_t dt_ms)
         ESP_LOGI(TAG, "NetworkManager → Trying WebSocket connect...");
         publishState(state::ConnectivityState::CONNECTING_WS);
 
+        // Ensure WS URL is configured before connecting
+        if (!config_.ws_url.empty()) {
+            ws->setUrl(config_.ws_url);
+        }
         ws->connect();
 
         ws_retry_timer = 2000;  // chống spam connect
+    }
+}
+
+void NetworkManager::taskEntry(void* arg)
+{
+    auto* self = static_cast<NetworkManager*>(arg);
+    if (!self) {
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    TickType_t prev = xTaskGetTickCount();
+    for (;;) {
+        if (!self->started.load()) {
+            vTaskDelete(nullptr);
+        }
+
+        TickType_t now = xTaskGetTickCount();
+        uint32_t dt_ms = (now - prev) * portTICK_PERIOD_MS;
+        prev = now;
+
+        self->update(dt_ms ? dt_ms : self->update_interval_ms);
+
+        vTaskDelay(pdMS_TO_TICKS(self->update_interval_ms));
     }
 }
 
@@ -156,6 +230,27 @@ void NetworkManager::onServerBinary(std::function<void(const uint8_t*, size_t)> 
 }
 
 // ============================================================================
+// RUNTIME CONFIG SETTERS
+// ============================================================================
+void NetworkManager::setWsUrl(const std::string& url)
+{
+    config_.ws_url = url;
+    if (ws && !url.empty()) {
+        ws->setUrl(url);
+    }
+}
+
+void NetworkManager::setApSsid(const std::string& apSsid)
+{
+    config_.ap_ssid = apSsid;
+}
+
+void NetworkManager::setDeviceLimit(uint8_t maxClients)
+{
+    config_.ap_max_clients = maxClients;
+}
+
+// ============================================================================
 // WIFI STATUS HANDLER
 // ============================================================================
 //
@@ -166,6 +261,8 @@ void NetworkManager::onServerBinary(std::function<void(const uint8_t*, size_t)> 
 //
 void NetworkManager::handleWifiStatus(int status)
 {
+    ESP_LOGI(TAG, "handleWifiStatus called with status=%d", status);
+    
     switch (status)
     {
     case 0: // DISCONNECTED
@@ -175,7 +272,7 @@ void NetworkManager::handleWifiStatus(int status)
 
         ws_should_run = false;
         ws_running = false;
-        ws->close();
+        if (ws) ws->close();
 
         publishState(state::ConnectivityState::OFFLINE);
         break;
@@ -195,6 +292,8 @@ void NetworkManager::handleWifiStatus(int status)
         publishState(state::ConnectivityState::CONNECTING_WS);
         break;
     }
+    
+    ESP_LOGI(TAG, "handleWifiStatus completed");
 }
 
 // ============================================================================

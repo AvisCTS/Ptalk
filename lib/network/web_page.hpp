@@ -27,8 +27,16 @@ const char PAGE_HTML[] = R"rawliteral(
         input { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box; }
         input[type='submit'] { background: #3182ce; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
         input[type='submit']:hover { background: #2b6cb0; }
+        
+        /* PASSWORD TOGGLE */
+        .password-group { display: flex; align-items: center; gap: 8px; margin-bottom: 15px; }
+        .password-group input { margin-bottom: 0; flex: 1; }
+        .toggle-checkbox { width: 20px; height: 20px; cursor: pointer; }
     </style>
-    <script>function sel(s){document.getElementById('s').value=s;document.getElementById('p').focus();}</script>
+    <script>
+        function sel(s){document.getElementById('s').value=s;document.getElementById('p').focus();}
+        function togglePassword(){var p=document.getElementById('p');p.type=p.type==='password'?'text':'password';}
+    </script>
 </head>
 <body>
     <div class='card'>
@@ -45,7 +53,11 @@ const char PAGE_HTML[] = R"rawliteral(
 
         <form method='POST' action='/connect'>
             <label>SSID</label><input id='s' name='ssid' required>
-            <label>Password</label><input id='p' name='pass' type='password'>
+            <label>Password</label>
+            <div class='password-group'>
+                <input id='p' name='pass' type='password'>
+                <input type='checkbox' class='toggle-checkbox' onclick='togglePassword()' title='Hiển thị mật khẩu'>
+            </div>
             <input type='submit' value='KẾT NỐI'>
         </form>
     </div>
