@@ -405,3 +405,11 @@ void NetworkManager::onFirmwareComplete(std::function<void(bool, const std::stri
 {
     on_firmware_complete_cb = cb;
 }
+
+// Stop captive portal if running (used for low-battery mode)
+void NetworkManager::stopPortal()
+{
+    if (wifi) {
+        wifi->stopCaptivePortal();
+    }
+}

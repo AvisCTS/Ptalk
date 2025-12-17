@@ -105,6 +105,9 @@ public:
      */
     void onFirmwareComplete(std::function<void(bool success, const std::string& msg)> cb);
 
+    // Control captive portal explicitly
+    void stopPortal();
+
 private:
     // ======================================================
     // Internal handlers
