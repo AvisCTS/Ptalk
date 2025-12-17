@@ -167,6 +167,7 @@ void StateManager::setPowerState(state::PowerState s) {
         if (s == power_state) return;
 
         power_state = s;
+
         ESP_LOGI(TAG, "PowerState: %d (change)", static_cast<int>(s));
 
         // Copy callbacks under lock
