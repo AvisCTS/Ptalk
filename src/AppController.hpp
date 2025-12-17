@@ -1,6 +1,8 @@
 #pragma once
 #include <memory>
 #include <atomic>
+#include <cstdint>
+#include "esp_sleep.h"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
 #include "freertos/FreeRTOS.h"
@@ -15,17 +17,9 @@ namespace event
         USER_BUTTON,             // UI physical press
         WAKEWORD_DETECTED,       // Wakeword engine triggers
         SERVER_FORCE_LISTEN,     // Remote control command
-        SERVER_PROCESSING_START, // Server tells device to start processing
-        SERVER_TTS_END,          // Server finished TTS playback
-        MIC_STREAM_TIMEOUT,      // Mic stream idle timeout
-        OTA_BEGIN,               // Server indicates firmware update available
-        OTA_DOWNLOAD_START,      // Server has firmware, start download
-        OTA_DOWNLOAD_CHUNK,      // Receiving firmware chunk from server
-        OTA_DOWNLOAD_COMPLETE,   // Download finished, ready to write
+        OTA_BEGIN,               // Trigger OTA flow
         OTA_FINISHED,            // OTA process finished (success or fail)
-        POWER_LOW,               // Battery low warning
-        POWER_RECOVER,           // Battery recovered from low
-        BATTERY_PERCENT_CHANGED, // Battery percentage changed
+        BATTERY_PERCENT_CHANGED, // Battery percentage changed (not a state)
         CANCEL_REQUEST,          // User requests to cancel current interaction
         SLEEP_REQUEST,           // Request to enter sleep mode
         WAKE_REQUEST             // Request to wake from sleep mode
@@ -58,21 +52,46 @@ class OTAUpdater;     // Firmware update
  * - Đăng ký callback với StateManager để phản hồi thay đổi trạng thái
  * - Được khởi tạo và cấu hình thông qua dependency injection của các module con
  */
-class AppController
-{
+class AppController {
 public:
+    struct Config {
+        uint32_t deep_sleep_wakeup_sec = 30; // interval to re-check battery while in deep sleep
+    };
+
+    // Singleton accessor
     static AppController &instance();
 
-    // ======= Lifecycle control =======
-    bool init();    // create modules, subscribe state callback
-    void start();   // create task
-    void stop();    // future
+    // ======= Lifecycle (consistent with all managers) =======
+    /**
+     * Initialize AppController:
+     * - Create message queue
+     * - Subscribe to StateManager for state changes
+     * Must be called before start()
+     * @return true if successful
+     */
+    bool init();
+
+    /**
+     * Start AppController task and dependent managers.
+     * Startup order: PowerManager → DisplayManager → NetworkManager
+     * Note: Call init() first
+     */
+    void start();
+
+    /**
+     * Stop AppController and all managers (reverse shutdown order).
+     * Safe to call multiple times.
+     */
+    void stop();
 
     // ======= External Actions =======
     void reboot();
     void enterSleep();
     void wake();
     void factoryReset();
+
+    // Configure app-level parameters (e.g., deep sleep wake interval)
+    void setConfig(const Config& cfg);
 
     // ======= Post application-level event to queue =======
     /**
@@ -91,9 +110,12 @@ public:
 
 private:
     AppController() = default;
-    ~AppController() = default;
+    ~AppController();
     AppController(const AppController &) = delete;
     AppController &operator=(const AppController &) = delete;
+    
+    // ✅ Guard to prevent enterSleep() re-entrance
+    std::atomic<bool> sleeping{false};
 
     // ======= Task Loop =======
     // Controller Task
@@ -128,4 +150,6 @@ private:
 
     // ======= Internal state =======
     std::atomic<bool> started{false};
+
+    Config config_{};
 };
