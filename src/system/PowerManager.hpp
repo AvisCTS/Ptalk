@@ -35,6 +35,9 @@ public:
     bool isFull() const { return ui_full; }
     bool isBatteryPresent() const { return battery_present; }
 
+    // Force an immediate power evaluation (runs one sample now)
+    void sampleNow();
+
 private:
     static void timerCallbackStatic(TimerHandle_t timer);
     void timerCallback();

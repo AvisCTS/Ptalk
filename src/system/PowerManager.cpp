@@ -61,6 +61,11 @@ void PowerManager::timerCallbackStatic(TimerHandle_t xTimer) {
     if (self) self->timerCallback();
 }
 
+void PowerManager::sampleNow() {
+    // Run one synchronous evaluation to update state immediately
+    timerCallback();
+}
+
 void PowerManager::timerCallback() {
     if (!power) return;
 
@@ -93,12 +98,11 @@ void PowerManager::timerCallback() {
     ui_charging = (charging == 1);
     ui_full = (full == 1);
 
-    // ====================================================================
-    // NEW: notify percent change
-    // ====================================================================
+    // ✅ Percent tracking: changes published via state machine, not events
+    // DisplayManager subscribes PowerState directly and reads battery from power manager
     if (last_percent_sent != last_percent) {
         last_percent_sent = last_percent;
-        AppController::instance().postEvent(event::AppEvent::BATTERY_PERCENT_CHANGED);
+        // NO direct AppController coupling - state-driven only
     }
 
     auto newState = evaluateState(last_voltage, last_percent, charging, full);
@@ -140,8 +144,8 @@ void PowerManager::publishIfChanged(state::PowerState new_state) {
 
     current_state = new_state;
 
-    ESP_LOGI(TAG, "PowerState -> %d (Volt: %.2fV %%:%d CHG:%d FULL:%d)",
-             (int)new_state,
+    ESP_LOGI(TAG, "PowerState: %d (Volt:%.2fV, %%:%u, CHG:%d, FULL:%d)",
+             static_cast<int>(new_state),
              last_voltage,
              last_percent,
              ui_charging,
