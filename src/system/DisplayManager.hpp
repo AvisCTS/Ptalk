@@ -5,6 +5,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <atomic>
 
 #include "StateTypes.hpp"
 #include "StateManager.hpp"
@@ -56,7 +57,7 @@ public:
     // Real-time update (should be called every 20–50ms)
     void update(uint32_t dt_ms);
 
-    // Optional internal task loop APIs (alternative to external caller)
+    // Lifecycle (consistent with other managers)
     bool startLoop(uint32_t interval_ms = 33,
                    UBaseType_t priority = 5,
                    uint32_t stackSize = 4096,
@@ -64,6 +65,12 @@ public:
     void stopLoop();
     bool isLoopRunning() const { return task_handle_ != nullptr; }
     void setUpdateIntervalMs(uint32_t interval_ms) { update_interval_ms_ = interval_ms; }
+    
+    // Aliases for consistency with other managers
+    bool start(uint32_t interval_ms = 33, UBaseType_t priority = 5, uint32_t stackSize = 4096, BaseType_t core = tskNO_AFFINITY) {
+        return startLoop(interval_ms, priority, stackSize, core);
+    }
+    void stop() { stopLoop(); }
 
     // Enable/Disable automatic UI updates from StateManager
     void enableStateBinding(bool enable);
@@ -119,6 +126,9 @@ public:
 
     // Power saving mode (stop animations)
     void setPowerSaveMode(bool enable);
+
+    // Backlight control passthrough
+    void setBacklight(bool on);
 
     // --- Asset Registration ---------------------------------------------------
     void registerEmotion(const std::string& name, const Animation& anim);
@@ -176,4 +186,5 @@ private:
     // Task loop state
     TaskHandle_t task_handle_ = nullptr;
     uint32_t update_interval_ms_ = 33; // ~30 FPS
+    std::atomic<bool> task_running_{false};  // ✅ Graceful shutdown flag
 };

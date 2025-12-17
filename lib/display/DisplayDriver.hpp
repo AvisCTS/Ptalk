@@ -41,6 +41,11 @@ public:
     ~DisplayDriver();
 
     bool init(const Config& cfg);
+    // Backlight control
+    void setBacklight(bool on);
+    
+    // Hold backlight pin state during deep sleep (requires RTC-capable GPIO)
+    void holdBacklightDuringDeepSleep(bool enable);
 
     // Flush full framebuffer to screen (most common usage)
     void flush(Framebuffer* fb);
@@ -62,9 +67,6 @@ private:
     void sendCommand(uint8_t cmd);
     void sendData(const uint8_t* data, size_t len);
     void setAddressWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
-
-    // Backlight control
-    void setBacklight(bool on);
 
 private:
     Config cfg_;

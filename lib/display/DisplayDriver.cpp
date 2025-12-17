@@ -6,6 +6,7 @@
 #include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 
 
 static const char* TAG = "DisplayDriver";
@@ -147,6 +148,8 @@ bool DisplayDriver::init(const Config& cfg)
     }
     if (cfg.pin_bl >= 0) {
         gpio_set_direction((gpio_num_t)cfg.pin_bl, GPIO_MODE_OUTPUT);
+        // Ensure any deep sleep hold from previous run is disabled
+        gpio_hold_dis((gpio_num_t)cfg.pin_bl);
         gpio_set_level((gpio_num_t)cfg.pin_bl, 1);
     }
 
@@ -176,6 +179,22 @@ bool DisplayDriver::init(const Config& cfg)
 
     ESP_LOGI(TAG, "ST7789 init OK");
     return true;
+}
+
+// ----------------------------------------------------------------------------
+// Backlight deep-sleep hold control
+// ----------------------------------------------------------------------------
+void DisplayDriver::holdBacklightDuringDeepSleep(bool enable)
+{
+    if (cfg_.pin_bl < 0) return;
+    if (enable) {
+        // Keep current BL level during deep sleep
+        gpio_hold_en((gpio_num_t)cfg_.pin_bl);
+        gpio_deep_sleep_hold_en();
+    } else {
+        gpio_hold_dis((gpio_num_t)cfg_.pin_bl);
+        gpio_deep_sleep_hold_dis();
+    }
 }
 
 // ----------------------------------------------------------------------------

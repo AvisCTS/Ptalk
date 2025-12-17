@@ -4,6 +4,7 @@
 #include "AnimationPlayer.hpp"
 
 #include <utility>
+#include <atomic>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -100,9 +101,24 @@ bool DisplayManager::startLoop(uint32_t interval_ms,
 void DisplayManager::stopLoop()
 {
     if (task_handle_ == nullptr) return;
-    TaskHandle_t th = task_handle_;
-    task_handle_ = nullptr;
-    vTaskDelete(th);
+    
+    // ✅ Signal graceful shutdown instead of force-deleting
+    task_running_.store(false);
+    
+    // Wait for task to exit (max 1 second)
+    uint32_t wait_ms = 0;
+    const uint32_t TIMEOUT_MS = 1000;
+    while (task_handle_ != nullptr && wait_ms < TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        wait_ms += 10;
+    }
+    
+    if (task_handle_ != nullptr) {
+        ESP_LOGW(TAG, "Display task did not exit; force deleting");
+        vTaskDelete(task_handle_);
+        task_handle_ = nullptr;
+    }
+    
     ESP_LOGI(TAG, "Display loop stopped");
 }
 
@@ -212,6 +228,13 @@ void DisplayManager::setPowerSaveMode(bool enable)
     }
 }
 
+void DisplayManager::setBacklight(bool on)
+{
+    if (drv) {
+        drv->setBacklight(on);
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Asset registration
 // ----------------------------------------------------------------------------
@@ -255,18 +278,20 @@ void DisplayManager::update(uint32_t dt_ms)
 void DisplayManager::taskEntry(void* arg)
 {
     auto* self = static_cast<DisplayManager*>(arg);
+    self->task_running_.store(true);  // ✅ Signal task is running
     TickType_t prev = xTaskGetTickCount();
-    for (;;) {
-        if (self->task_handle_ == nullptr) {
-            // Stopped; exit task
-            vTaskDelete(nullptr);
-        }
+    
+    while (self->task_running_.load()) {  // ✅ Check graceful shutdown flag
         TickType_t now = xTaskGetTickCount();
         uint32_t dt_ms = (now - prev) * portTICK_PERIOD_MS;
         prev = now;
         self->update(dt_ms);
         vTaskDelay(pdMS_TO_TICKS(self->update_interval_ms_));
     }
+    
+    // ✅ Graceful exit: cleanup and notify stopper
+    self->task_handle_ = nullptr;
+    vTaskDelete(nullptr);
 }
 
 // ----------------------------------------------------------------------------
