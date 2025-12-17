@@ -32,7 +32,7 @@ class AnimationPlayer;     // Multi-frame animation engine
 // ----------------------------------------------------------------------------
 // - Subscribe to StateManager (optional)
 // - AppController can also call UI API directly
-// - Handles emotion animation, icons, toast messages, power-save mode
+// - Handles emotion animation, icons, power-save mode
 // - Uses DisplayDriver for actual drawing
 //
 class DisplayManager {
@@ -44,6 +44,13 @@ public:
         int w = 0;
         int h = 0;
         const uint16_t* rgb = nullptr;
+    };
+
+    enum class IconPlacement {
+        Custom,     // Use provided x,y
+        Center,     // Centered on screen
+        TopRight,   // Near top-right corner
+        Fullscreen  // Origin (0,0), icon sized to screen
     };
 
 public:
@@ -75,20 +82,9 @@ public:
     // Enable/Disable automatic UI updates from StateManager
     void enableStateBinding(bool enable);
 
-    // --- High-level UI API (used by AppController) ---------------------------
-    void showIdle();
-    void showListening(state::InputSource src);
-    void showThinking();
-    void showSpeaking();
-    void showError(const char* msg);
-
-    void showLowBattery();
-    void showCharging();
-    void showFullBattery();
+    // Exposed controls
     void setBatteryPercent(uint8_t p);
     
-    // Show short message on screen
-    void showToast(const std::string& text, uint32_t duration_ms = 3000);
 
     // ======= OTA Update UI =======
     /**
@@ -143,7 +139,9 @@ private:
 
     // Internal asset playback
     void playEmotion(const std::string& name, int x = 0, int y = 0);
-    void playIcon(const std::string& name, int x = 0, int y = 0);
+    void playIcon(const std::string& name,
+                  IconPlacement placement = IconPlacement::Custom,
+                  int x = 0, int y = 0);
     static void taskEntry(void* arg);
     
 
@@ -159,10 +157,7 @@ private:
     // battery
     uint8_t battery_percent = 255;
 
-    // toast system
-    std::string toast_text;
-    uint32_t toast_timer = 0;
-    bool toast_active = false;
+    // (toast system removed)
 
     // OTA update state
     uint8_t ota_progress_percent = 0;

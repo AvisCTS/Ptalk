@@ -152,69 +152,14 @@ void DisplayManager::enableStateBinding(bool enable)
     ESP_LOGI(TAG, "DisplayManager state binding enabled");
 }
 
-// ----------------------------------------------------------------------------
-// High-level UI API
-// ----------------------------------------------------------------------------
-
-void DisplayManager::showIdle() {
-    playEmotion("idle");
-    toast_active = false;
-}
-
-void DisplayManager::showListening(state::InputSource src) {
-    playEmotion("listening");
-
-    switch (src) {
-        case state::InputSource::BUTTON: showToast("Button → Listening"); break;
-        case state::InputSource::WAKEWORD: showToast("Wakeword detected"); break;
-        case state::InputSource::SERVER_COMMAND: showToast("Server request"); break;
-        default: break;
-    }
-}
-
-void DisplayManager::showThinking() {
-    playEmotion("thinking");
-    showToast("Processing...");
-}
-
-void DisplayManager::showSpeaking() {
-    playEmotion("speaking");
-}
-
-void DisplayManager::showError(const char* msg) {
-    playEmotion("error");
-    showToast(msg ? msg : "Error");
-}
-
-void DisplayManager::showLowBattery() {
-    playIcon("battery_low");
-    showToast("Low battery");
-}
-
-void DisplayManager::showCharging() {
-    playIcon("battery_charge");
-    showToast("Charging...");
-}
-
-void DisplayManager::showFullBattery() {
-    playIcon("battery_full");
-    showToast("Full battery");
-}
+// (public show* helpers removed; UI is driven via handlers)
 
 void DisplayManager::setBatteryPercent(uint8_t p) {
     battery_percent = p;
 }
 
 
-// ----------------------------------------------------------------------------
-// Toast
-// ----------------------------------------------------------------------------
-void DisplayManager::showToast(const std::string& text, uint32_t duration_ms)
-{
-    toast_text = text;
-    toast_timer = duration_ms;
-    toast_active = true;
-}
+// (toast feature removed)
 
 // ----------------------------------------------------------------------------
 // Power saving mode
@@ -252,19 +197,24 @@ void DisplayManager::update(uint32_t dt_ms)
 {
     if (!fb || !drv) return;
 
+    // ✅ DEBUG: Log first update to verify task is running
+    static bool first_update = true;
+    if (first_update) {
+        ESP_LOGI(TAG, "First update() called - display loop is working");
+        first_update = false;
+    }
+
     // 1) update animation frame
     anim_player->update(dt_ms);
+    
+    // ✅ 2) Render animation frame to framebuffer
+    anim_player->render();
 
-    // 2) draw icon if needed
+    // 3) draw icon if needed
     // (icons are drawn as overlay → always on top)
     // (you can extend later with battery percent etc.)
 
-    // 3) draw toast text
-    if (toast_active && toast_timer > 0) {
-        drv->drawTextCenter(fb.get(), toast_text.c_str(), 0xFFFF, width_/2, height_-25);
-        toast_timer = (toast_timer > dt_ms) ? toast_timer - dt_ms : 0;
-        if (toast_timer == 0) toast_active = false;
-    }
+    // (toast drawing removed)
     // 4) draw battery percent if available
     if (battery_percent != 255) {
         std::string bat_str = std::to_string(battery_percent) + "%";
@@ -285,6 +235,7 @@ void DisplayManager::taskEntry(void* arg)
         TickType_t now = xTaskGetTickCount();
         uint32_t dt_ms = (now - prev) * portTICK_PERIOD_MS;
         prev = now;
+        ESP_LOGD(TAG, "DisplayManager update dt_ms=%u", dt_ms);
         self->update(dt_ms);
         vTaskDelay(pdMS_TO_TICKS(self->update_interval_ms_));
     }
@@ -303,26 +254,24 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
     switch (s) {
         case state::InteractionState::TRIGGERED:
         case state::InteractionState::LISTENING:
-            showListening(src);
+            playEmotion("listening");
             break;
         case state::InteractionState::PROCESSING:
-            showThinking();
+            playEmotion("thinking");
             break;
         case state::InteractionState::SPEAKING:
-            showSpeaking();
+            playEmotion("speaking");
             break;
         case state::InteractionState::CANCELLING:
-            showToast("Cancelled", 1500);
             break;
         case state::InteractionState::MUTED:
-            showToast("Muted");
             break;
         case state::InteractionState::SLEEPING:
             setPowerSaveMode(true);
             break;
         case state::InteractionState::IDLE:
         default:
-            showIdle();
+            playEmotion("idle");
             break;
     }
 }
@@ -332,24 +281,19 @@ void DisplayManager::handleConnectivity(state::ConnectivityState s)
     switch (s) {
         case state::ConnectivityState::OFFLINE:
             playIcon("wifi_fail");
-            showToast("Offline");
             break;
 
         case state::ConnectivityState::CONNECTING_WIFI:
-            showToast("Connecting WiFi...");
             break;
 
         case state::ConnectivityState::WIFI_PORTAL:
-            showToast("WiFi Portal Mode");
             break;
 
         case state::ConnectivityState::CONNECTING_WS:
-            showToast("Connecting Server...");
             break;
 
         case state::ConnectivityState::ONLINE:
             playIcon("wifi_ok");
-            showToast("Online");
             break;
     }
 }
@@ -359,29 +303,25 @@ void DisplayManager::handleSystem(state::SystemState s)
     switch (s) {
         case state::SystemState::BOOTING:
             playEmotion("boot");
-            showToast("Booting...");
             break;
 
         case state::SystemState::RUNNING:
-            showIdle();
+            playEmotion("idle");
             break;
 
         case state::SystemState::ERROR:
-            showError("System Error");
+            playEmotion("error");
             break;
 
         case state::SystemState::MAINTENANCE:
-            showToast("Maintenance Mode");
             playEmotion("maintenance");
             break;
 
         case state::SystemState::UPDATING_FIRMWARE:
-            showToast("Updating...");
             playEmotion("updating");
             break;
 
         case state::SystemState::FACTORY_RESETTING:
-            showToast("Factory Reset...");
             playEmotion("reset");
             break;
     }
@@ -395,15 +335,15 @@ void DisplayManager::handlePower(state::PowerState s)
             break;
 
         case state::PowerState::LOW_BATTERY:
-            showLowBattery();
+            playIcon("battery_low");
             break;
 
         case state::PowerState::CHARGING:
-            showCharging();
+            playIcon("battery_charge");
             break;
 
         case state::PowerState::FULL_BATTERY:
-            showFullBattery();
+            playIcon("battery_full");
             break;
 
         case state::PowerState::POWER_SAVING:
@@ -411,13 +351,14 @@ void DisplayManager::handlePower(state::PowerState s)
             break;
 
         case state::PowerState::CRITICAL:
-            showToast("Battery Critical!", 4000);
-            playEmotion("lowbat");
+            ESP_LOGI(TAG, "CRITICAL: show critical battery icon");
+            // Show registered critical battery icon fullscreen
+            playIcon("battery_critical", IconPlacement::Fullscreen);
+            // ✅ Removed blocking delay - icon stays visible via display loop
             break;
 
         case state::PowerState::ERROR:
             playEmotion("error");
-            showToast("Battery Error!", 4000);
             break;
     }
 }
@@ -434,6 +375,8 @@ void DisplayManager::playEmotion(const std::string& name, int x, int y)
 
     const Animation& anim = it->second;
 
+    ESP_LOGI(TAG, "playEmotion '%s' starting animation", name.c_str());
+
     // Clear previous
     //fb->clear(0x0000);
 
@@ -441,7 +384,10 @@ void DisplayManager::playEmotion(const std::string& name, int x, int y)
     anim_player->setAnimation(anim, x, y);
 }
 
-void DisplayManager::playIcon(const std::string& name, int x, int y)
+void DisplayManager::playIcon(const std::string& name,
+                              IconPlacement placement,
+                              int x,
+                              int y)
 {
     auto it = icons.find(name);
     if (it == icons.end()) {
@@ -451,11 +397,51 @@ void DisplayManager::playIcon(const std::string& name, int x, int y)
 
     const Icon& ico = it->second;
 
-    // Clear background but keep animation if needed
-    // For now we clear full (sau chỉnh logic overlay):
-    //fb->clear(0x0000);
+    int draw_x = x;
+    int draw_y = y;
 
-    fb->drawBitmap(x, y, ico.w, ico.h, ico.rgb);
+    ESP_LOGI(TAG, "playIcon '%s' placement=%d size=%dx%d", name.c_str(), (int)placement, ico.w, ico.h);
+    
+    // ✅ DEBUG: Check icon data validity
+    if (ico.rgb == nullptr) {
+        ESP_LOGE(TAG, "Icon '%s' has NULL rgb data!", name.c_str());
+        return;
+    }
+    ESP_LOGI(TAG, "Icon data ptr: %p, first pixel: 0x%04X", ico.rgb, ico.rgb[0]);
+
+    switch (placement) {
+        case IconPlacement::Center:
+            draw_x = (width_ - ico.w) / 2;
+            draw_y = (height_ - ico.h) / 2;
+            break;
+        case IconPlacement::TopRight:
+            draw_x = width_ - ico.w - 8;  // small margin from edges
+            draw_y = 8;
+            break;
+        case IconPlacement::Fullscreen:
+            draw_x = 0;
+            draw_y = 0;
+            break;
+        case IconPlacement::Custom:
+        default:
+            // keep provided x,y
+            break;
+    }
+
+    // Clamp to screen bounds to avoid out-of-range writes
+    if (draw_x < 0) draw_x = 0;
+    if (draw_y < 0) draw_y = 0;
+
+    ESP_LOGI(TAG, "drawBitmap at (%d,%d)", draw_x, draw_y);
+    fb->drawBitmap(draw_x, draw_y, ico.w, ico.h, ico.rgb);
+
+    // Push immediately so critical/one-shot icons show even if the loop stops soon
+    if (drv) {
+        ESP_LOGI(TAG, "Flushing framebuffer immediately");
+        drv->flush(fb.get());
+    } else {
+        ESP_LOGW(TAG, "drv is null, cannot flush");
+    }
 }
 
 // ============================================================================
