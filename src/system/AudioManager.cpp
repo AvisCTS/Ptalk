@@ -60,7 +60,7 @@ bool AudioManager::init()
     rb_mic_pcm     = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_BYTEBUF);
     rb_mic_encoded = xRingbufferCreate(4 * 1024, RINGBUF_TYPE_BYTEBUF);
     rb_spk_pcm     = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_BYTEBUF);
-    rb_spk_encoded = xRingbufferCreate(4 * 1024, RINGBUF_TYPE_BYTEBUF);
+    rb_spk_encoded = xRingbufferCreate(16 * 1024, RINGBUF_TYPE_BYTEBUF);
 
     if (!rb_mic_pcm || !rb_mic_encoded || !rb_spk_pcm || !rb_spk_encoded) {
         ESP_LOGE(TAG, "Failed to create ring buffers");
@@ -214,6 +214,12 @@ void AudioManager::startSpeaking()
     if (speaking) return;
     ESP_LOGI(TAG, "Start speaking");
     speaking = true;
+    
+    // Reset codec to clear predictor/step_index state
+    if (codec) {
+        codec->reset();
+    }
+    
     output->startPlayback();
 }
 
@@ -291,11 +297,25 @@ void AudioManager::micTaskLoop()
 void AudioManager::spkTaskLoop()
 {
     ESP_LOGI(TAG, "Speaker task started");
+    bool prebuffered = false;
 
     while (started) {
         if (!speaking || power_saving) {
             vTaskDelay(pdMS_TO_TICKS(10));
+            prebuffered = false;  // Reset prebuffering when not speaking
             continue;
+        }
+
+        // Prebuffering: wait for 1KB in buffer before starting playback
+        if (!prebuffered) {
+            UBaseType_t items_waiting = 0;
+            vRingbufferGetInfo(rb_spk_encoded, nullptr, nullptr, nullptr, nullptr, &items_waiting);
+            if (items_waiting < 1024) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+            prebuffered = true;
+            ESP_LOGI(TAG, "Speaker prebuffering complete, starting playback");
         }
 
         size_t item_size = 0;

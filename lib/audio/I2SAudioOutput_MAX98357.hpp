@@ -51,5 +51,5 @@ private:
     Config cfg_;
 
     bool running = false;
-    uint8_t volume = 100; // logical volume (0–100)
+    uint8_t volume = 100;  // Default 100% to avoid clipping // logical volume (0–100)
 };

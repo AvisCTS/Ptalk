@@ -345,7 +345,7 @@ void NetworkManager::handleWsTextMessage(const std::string& msg)
 
 void NetworkManager::handleWsBinaryMessage(const uint8_t* data, size_t len)
 {
-    ESP_LOGI(TAG, "WS Binary Message (%zu bytes)", len);
+    //ESP_LOGI(TAG, "WS Binary Message (%zu bytes)", len);
     
     // Check if this is firmware data during OTA download
     if (firmware_download_active) {

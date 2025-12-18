@@ -8,6 +8,11 @@
 #include "system/NetworkManager.hpp"
 #include "system/PowerManager.hpp"
 #include "system/OTAUpdater.hpp"
+// State control for audio speak/listen transitions
+#include "system/StateManager.hpp"
+#include "system/StateTypes.hpp"
+// Ring buffer API to feed downlink audio into AudioManager
+#include "freertos/ringbuf.h"
 
 // ===== Drivers / IO =====
 #include "DisplayDriver.hpp"
@@ -195,8 +200,9 @@ bool DeviceProfile::setup(AppController &app)
     net_cfg.ap_max_clients = 4;       // Số thiết bị tối đa kết nối vào portal
 
     // Đặt địa chỉ IP và port của WebSocket server (ví dụ: 192.168.1.100:8080)
-    // Có thể thêm path nếu server yêu cầu, ví dụ: ws://192.168.1.100:8080/ws
-    net_cfg.ws_url = "ws://192.168.1.100:8080";
+    // Thêm path nếu server yêu cầu, ví dụ: ws://192.168.1.100:8080/ws
+    // Uvicorn/FastAPI thường khai báo endpoint WebSocket tại "/ws".
+    net_cfg.ws_url = "ws://192.168.0.103:8080/ws";
 
     if (!network->init(net_cfg))
     {
@@ -204,13 +210,41 @@ bool DeviceProfile::setup(AppController &app)
         return false;
     }
 
-    // --- Network → Audio callback ---
-    // TODO: Uncomment khi AudioManager sẵn sàng nhận data từ server
-    // network->onServerBinary(
-    //     [&audio](const uint8_t* data, size_t len) {
-    //         audio->onAudioPacketFromServer(data, len);
-    //     }
-    // );
+    // --- Network → Audio wiring ---
+    // Push incoming binary (ADPCM) from WS into speaker ringbuffer
+    // and drive InteractionState to SPEAKING while audio is arriving.
+    RingbufHandle_t spk_rb = audio->getSpeakerEncodedBuffer();
+
+    network->onServerBinary([spk_rb](const uint8_t* data, size_t len) {
+        if (!data || len == 0) return;
+        // Feed encoded data to AudioManager's downlink buffer
+        xRingbufferSend(spk_rb, data, len, 0);
+
+        // Ensure device is in SPEAKING to enable playback
+        auto& sm = StateManager::instance();
+        if (sm.getInteractionState() != state::InteractionState::SPEAKING) {
+            sm.setInteractionState(state::InteractionState::SPEAKING,
+                                   state::InputSource::SERVER_COMMAND);
+        }
+    });
+
+    // Optionally react to simple text control messages from server
+    network->onServerText([](const std::string& msg) {
+        auto& sm = StateManager::instance();
+        if (msg == "PROCESSING_START" || msg == "PROCESSING") {
+            sm.setInteractionState(state::InteractionState::PROCESSING,
+                                   state::InputSource::SERVER_COMMAND);
+        } else if (msg == "LISTENING") {
+            sm.setInteractionState(state::InteractionState::LISTENING,
+                                   state::InputSource::SERVER_COMMAND);
+        } else if (msg == "SPEAKING" || msg == "SPEAK_START") {
+            sm.setInteractionState(state::InteractionState::SPEAKING,
+                                   state::InputSource::SERVER_COMMAND);
+        } else if (msg == "IDLE" || msg == "SPEAK_END" || msg == "DONE") {
+            sm.setInteractionState(state::InteractionState::IDLE,
+                                   state::InputSource::SERVER_COMMAND);
+        }
+    });
 
     // =========================================================
     // 4️⃣ TOUCH INPUT
