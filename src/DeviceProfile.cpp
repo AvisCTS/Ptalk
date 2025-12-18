@@ -213,23 +213,49 @@ bool DeviceProfile::setup(AppController &app)
     // --- Network → Audio wiring ---
     // Push incoming binary (ADPCM) from WS into speaker ringbuffer
     // and drive InteractionState to SPEAKING while audio is arriving.
-    RingbufHandle_t spk_rb = audio->getSpeakerEncodedBuffer();
-
-    network->onServerBinary([spk_rb](const uint8_t* data, size_t len) {
+    SimpleRingBuffer* spk_rb = audio->getSpeakerEncodedBuffer();
+    AudioManager* audio_ptr = audio.get();  // Capture pointer for disconnect handler
+    NetworkManager* network_ptr = network.get();  // For session flag access
+    
+    network->onServerBinary([spk_rb, network_ptr](const uint8_t* data, size_t len) {
         if (!data || len == 0) return;
         // Feed encoded data to AudioManager's downlink buffer
-        xRingbufferSend(spk_rb, data, len, 0);
+        size_t written = spk_rb->write(data, len, pdMS_TO_TICKS(100));
+        if (written != len) {
+            static uint32_t drop_count = 0;
+            if (++drop_count % 10 == 0) {
+                ESP_LOGW("Network", "ADPCM buffer full! Dropped %zu bytes (wanted %zu)", len - written, len);
+            }
+        }
 
-        // Ensure device is in SPEAKING to enable playback
-        auto& sm = StateManager::instance();
-        if (sm.getInteractionState() != state::InteractionState::SPEAKING) {
+        // Set SPEAKING only ONCE per TTS session (prevent state spam)
+        if (!network_ptr->isSpeakingSessionActive()) {
+            network_ptr->startSpeakingSession();
+            auto& sm = StateManager::instance();
             sm.setInteractionState(state::InteractionState::SPEAKING,
                                    state::InputSource::SERVER_COMMAND);
         }
     });
+    
+    // Handle WS disconnect - must cleanup to unblock speaker task
+    network->onDisconnect([spk_rb, audio_ptr]() {
+        auto& sm = StateManager::instance();
+        auto current_state = sm.getInteractionState();
+        
+        ESP_LOGW("DeviceProfile", "WS disconnected - cleanup audio state");
+        
+        // Flush buffer to wake speaker task from blocking read
+        spk_rb->flush();
+        
+        // Stop speaking to set speaking=false and unblock task
+        if (current_state == state::InteractionState::SPEAKING) {
+            sm.setInteractionState(state::InteractionState::IDLE,
+                                   state::InputSource::SYSTEM);
+        }
+    });
 
     // Optionally react to simple text control messages from server
-    network->onServerText([](const std::string& msg) {
+    network->onServerText([network_ptr](const std::string& msg) {
         auto& sm = StateManager::instance();
         if (msg == "PROCESSING_START" || msg == "PROCESSING") {
             sm.setInteractionState(state::InteractionState::PROCESSING,
@@ -240,9 +266,27 @@ bool DeviceProfile::setup(AppController &app)
         } else if (msg == "SPEAKING" || msg == "SPEAK_START") {
             sm.setInteractionState(state::InteractionState::SPEAKING,
                                    state::InputSource::SERVER_COMMAND);
-        } else if (msg == "IDLE" || msg == "SPEAK_END" || msg == "DONE") {
+        } else if (msg == "IDLE" || msg == "SPEAK_END" || msg == "DONE" || msg == "TTS_END") {
+            // Reset session flag to allow next TTS session
+            network_ptr->endSpeakingSession();
             sm.setInteractionState(state::InteractionState::IDLE,
                                    state::InputSource::SERVER_COMMAND);
+        }
+    });
+
+    // =========================================================
+    // STATE OBSERVER: Control WS immune mode during SPEAKING
+    // =========================================================
+    // During audio streaming, prevent WS from closing on WiFi fluctuations
+    // (use network_ptr already declared above)
+    auto& sm = StateManager::instance();
+    sm.subscribeInteraction([network_ptr](state::InteractionState new_state, state::InputSource src) {
+        if (new_state == state::InteractionState::SPEAKING) {
+            // Enable immune mode - WS must survive WiFi roaming/power save transitions
+            network_ptr->setWSImmuneMode(true);
+        } else {
+            // Disable immune mode when not speaking
+            network_ptr->setWSImmuneMode(false);
         }
     });
 
