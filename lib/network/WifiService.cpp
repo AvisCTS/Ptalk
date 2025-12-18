@@ -5,8 +5,8 @@
 #include "nvs_flash.h"
 #include "esp_http_server.h"
 #include "web_page.hpp"
-#include "logo1.hpp"  // Use original logo
-#include "logo2.hpp"
+#include "../../src/assets/logos/logo1.hpp"  // Use original logo
+#include "../../src/assets/logos/logo2.hpp"
 
 #include <algorithm>
 
