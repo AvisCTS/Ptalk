@@ -57,6 +57,7 @@ namespace state
         BUTTON,         // Physical button
         WAKEWORD,       // Wakeword detected
         SERVER_COMMAND, // remote trigger
+        SYSTEM,         // system-triggered (e.g. auto-listen)
         UNKNOWN         // fallback
     };
 
