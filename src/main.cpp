@@ -2,7 +2,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "AppController.hpp"
-#include "DeviceProfile.hpp"
+#include "config/DeviceProfile.hpp"
 
 static const char *TAG = "MAIN_TEST";
 
