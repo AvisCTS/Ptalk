@@ -103,7 +103,7 @@ void NetworkManager::start()
             "NetworkLoop",
             8192,  // Increased from 4096 to prevent stack overflow
             this,
-            3,
+            5,
             &task_handle,
             tskNO_AFFINITY
         );
@@ -163,7 +163,7 @@ void NetworkManager::update(uint32_t dt_ms)
         }
         ws->connect();
 
-        ws_retry_timer = 2000;  // chống spam connect
+        ws_retry_timer = 5000;  // 5 second delay between reconnect attempts
     }
 }
 
@@ -229,6 +229,21 @@ void NetworkManager::onServerBinary(std::function<void(const uint8_t*, size_t)> 
     on_binary_cb = cb;
 }
 
+void NetworkManager::onDisconnect(std::function<void()> cb)
+{
+    on_disconnect_cb = cb;
+}
+
+void NetworkManager::setWSImmuneMode(bool immune)
+{
+    ws_immune_mode = immune;
+    if (immune) {
+        ESP_LOGI(TAG, "WS immune mode ENABLED - WS will ignore WiFi fluctuations");
+    } else {
+        ESP_LOGI(TAG, "WS immune mode DISABLED - normal WS behavior");
+    }
+}
+
 // ============================================================================
 // RUNTIME CONFIG SETTERS
 // ============================================================================
@@ -270,11 +285,17 @@ void NetworkManager::handleWifiStatus(int status)
 
         wifi_ready = false;
 
-        ws_should_run = false;
-        ws_running = false;
-        if (ws) ws->close();
-
-        publishState(state::ConnectivityState::OFFLINE);
+        // Only close WS if NOT in immune mode (during audio streaming, keep WS alive)
+        if (!ws_immune_mode) {
+            ws_should_run = false;
+            ws_running = false;
+            if (ws) ws->close();
+            publishState(state::ConnectivityState::OFFLINE);
+        } else {
+            ESP_LOGI(TAG, "WS immune mode active - ignoring WiFi disconnect, keeping WS alive");
+            // Keep ws_should_run and ws_running unchanged
+            // WS will survive temporary WiFi fluctuations
+        }
         break;
 
     case 1: // CONNECTING
@@ -287,7 +308,7 @@ void NetworkManager::handleWifiStatus(int status)
 
         wifi_ready = true;
         ws_should_run = true;
-        ws_retry_timer = 10; // connect WS sớm nhất có thể
+        ws_retry_timer = 500; // Wait 500ms for WiFi to stabilize before WS connect
 
         publishState(state::ConnectivityState::CONNECTING_WS);
         break;
@@ -310,8 +331,19 @@ void NetworkManager::handleWsStatus(int status)
     switch (status)
     {
     case 0: // CLOSED
+        if (ws_immune_mode) {
+              ESP_LOGW(TAG, "WS → CLOSED during immune mode - forcing cleanup");
+              // Server disconnect is FATAL - must cleanup even during audio
+              ws_immune_mode = false;  // Disable immune mode to allow cleanup
+        }
+        
         ESP_LOGW(TAG, "WS → CLOSED");
         ws_running = false;
+        
+        // Notify disconnect callback to flush audio buffer
+        if (on_disconnect_cb) {
+            on_disconnect_cb();
+        }
 
         if (ws_should_run) {
             ws_retry_timer = 1500;  // retry nhẹ nhàng

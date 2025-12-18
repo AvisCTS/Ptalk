@@ -82,6 +82,22 @@ public:
 
     /// Callback khi server gửi binary
     void onServerBinary(std::function<void(const uint8_t*, size_t)> cb);
+    
+    /// Callback khi WebSocket disconnect (để flush buffer/reset state)
+    void onDisconnect(std::function<void()> cb);
+    
+    /// Set WS immune mode - when true, prevents WS from closing on WiFi fluctuations
+    /// Use during critical operations like audio streaming
+    void setWSImmuneMode(bool immune);
+    
+    /// Check if currently in active speaking session
+    bool isSpeakingSessionActive() const { return speaking_session_active; }
+    
+    /// Mark start of speaking session (prevents SPEAKING state spam)
+    void startSpeakingSession() { speaking_session_active = true; }
+    
+    /// Mark end of speaking session (allows next TTS to trigger SPEAKING)
+    void endSpeakingSession() { speaking_session_active = false; }
 
     // ======================================================
     // OTA Firmware Update Support
@@ -151,6 +167,8 @@ private:
     // WS runtime control
     bool ws_should_run = false;   // Manager muốn WS chạy
     bool ws_running    = false;   // WS thực sự open chưa
+    bool ws_immune_mode = false;  // Prevent WS close during critical operations (e.g. audio streaming)
+    bool speaking_session_active = false;  // Prevent SPEAKING state spam per TTS session
 
     // Retry timer (ms)
     uint32_t ws_retry_timer = 0;
@@ -162,6 +180,7 @@ private:
     // ======================================================
     std::function<void(const std::string&)> on_text_cb = nullptr;
     std::function<void(const uint8_t*, size_t)> on_binary_cb = nullptr;
+    std::function<void()> on_disconnect_cb = nullptr;
 
     // ======================================================
     // OTA Callbacks
