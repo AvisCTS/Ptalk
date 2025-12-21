@@ -6,52 +6,42 @@
 #include <memory>
 #include "Framebuffer.hpp"
 
-/*
- * AnimationFrame
- * ---------------------------------------------------------
- * Một frame animation: chứa
- *  - width, height
- *  - con trỏ tới RGB565 buffer
- *  - optional alpha mask (8 bit)
- */
-
-struct AnimationFrame {
-    int w = 0;
-    int h = 0;
-    const uint16_t* rgb = nullptr;
-    const uint8_t*  alpha = nullptr;   // nullptr nếu frame không có alpha
-
-    AnimationFrame() = default;
-    AnimationFrame(int _w, int _h, const uint16_t* _rgb, const uint8_t* _alpha)
-        : w(_w), h(_h), rgb(_rgb), alpha(_alpha) {}
-};
-
+// Forward declare emotion types
+namespace asset { namespace emotion {
+    struct DiffBlock;
+    struct FrameInfo;
+}}
 
 /*
- * Animation
+ * Animation1Bit
  * ---------------------------------------------------------
- * Một animation hoàn chỉnh:
- *  - danh sách frames
- *  - fps
- *  - loop hay one-shot
+ * 1-bit black/white animation with diff encoding:
+ *  - Frame 0: full 1-bit bitmap (width * height / 8 bytes)
+ *  - Frame 1+: single DiffBlock per frame (bounding box + packed data)
  */
-struct Animation {
-    std::vector<AnimationFrame> frames;
+struct Animation1Bit {
+    int width = 0;
+    int height = 0;
+    int frame_count = 0;
     uint16_t fps = 20;
     bool loop = true;
+    const uint8_t* base_frame = nullptr;                    // Frame 0 full 1-bit bitmap
+    const asset::emotion::FrameInfo* frames = nullptr;       // Array of frame infos
 
-    bool valid() const { return !frames.empty(); }
+    bool valid() const { 
+        return width > 0 && height > 0 && frame_count > 0 && 
+               base_frame != nullptr && frames != nullptr; 
+    }
 };
 
 
 /*
  * AnimationPlayer
  * ---------------------------------------------------------
- * Thực hiện:
- *  - set animation
- *  - update(dt_ms)
- *  - render vào framebuffer (ở vị trí x,y)
- *  - pause/resume
+ * Plays 1-bit black/white animations with diff encoding:
+ *  - Decodes base frame (1-bit) to RGB565 working buffer
+ *  - Applies diff blocks for subsequent frames
+ *  - Renders to framebuffer at specified position
  *
  * Note: Không dùng timer riêng — DisplayManager sẽ gọi update().
  */
@@ -59,10 +49,10 @@ struct Animation {
 class AnimationPlayer {
 public:
     AnimationPlayer(Framebuffer* fb, class DisplayDriver* drv);
-    ~AnimationPlayer() = default;
+    ~AnimationPlayer();
 
-    // Set animation mới
-    void setAnimation(const Animation& anim, int x = 0, int y = 0);
+    // Set animation mới (1-bit format)
+    void setAnimation(const Animation1Bit& anim, int x = 0, int y = 0);
 
     // Stop (không vẽ gì)
     void stop();
@@ -79,12 +69,22 @@ public:
     void render();
 
 private:
+    // Decode 1-bit packed data to RGB565 working buffer
+    void decode1BitToRGB565(const uint8_t* packed_data, int width, int height);
+    
+    // Apply diff block to current working buffer
+    void applyDiffBlock(const asset::emotion::DiffBlock* diff);
+
     Framebuffer* fb_ = nullptr;
     DisplayDriver* drv_ = nullptr;
 
-    Animation current_anim_;
+    Animation1Bit current_anim_;
     int pos_x_ = 0;
     int pos_y_ = 0;
+
+    // Working buffer for current decoded frame (RGB565)
+    uint16_t* working_buffer_ = nullptr;
+    size_t buffer_size_ = 0;
 
     uint32_t frame_timer_ = 0;   // tăng theo dt
     uint32_t frame_interval_ = 50; // ms/frame (20 fps)
