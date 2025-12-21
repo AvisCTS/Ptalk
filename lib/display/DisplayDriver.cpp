@@ -321,3 +321,39 @@ void DisplayDriver::drawTextCenter(Framebuffer* fb, const char* text, uint16_t c
     //ESP_LOGI(TAG, "drawTextCenter: drawing at (%d,%d)", x, y);
     fb->drawText8x8(x, y, text, color);
 }
+// Display rotation (0, 1, 2, 3 = 0°, 90°, 180°, 270°)
+void DisplayDriver::setRotation(uint8_t rotation)
+{
+    // MADCTL bits for rotation
+    // Rot 0 (0°):   MY=1, MX=1, MV=0  → normal
+    // Rot 1 (90°):  MY=0, MX=1, MV=1  → rotate 90 CW
+    // Rot 2 (180°): MY=0, MX=0, MV=0  → rotate 180
+    // Rot 3 (270°): MY=1, MX=0, MV=1  → rotate 270 CW
+    
+    uint8_t madctl = 0;
+    
+    rotation = rotation % 4;  // Ensure 0-3
+    
+    switch (rotation) {
+        case 0:  // 0°
+            madctl = ST7789_MADCTL_MX | ST7789_MADCTL_MY;
+            break;
+        case 1:  // 90°
+            madctl = ST7789_MADCTL_MX | ST7789_MADCTL_MV;
+            break;
+        case 2:  // 180°
+            madctl = 0;
+            break;
+        case 3:  // 270°
+            madctl = ST7789_MADCTL_MY | ST7789_MADCTL_MV;
+            break;
+    }
+    
+    // Keep BGR flag if set
+    madctl |= ST7789_MADCTL_BGR;
+    
+    sendCommand(ST7789_CMD_MADCTL);
+    sendData(&madctl, 1);
+    
+    ESP_LOGI(TAG, "Display rotation set to %u (0x%02X)", rotation, madctl);
+}

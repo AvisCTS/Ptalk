@@ -63,6 +63,9 @@ public:
     void drawText(Framebuffer* fb, const char* text, uint16_t color, int x, int y);
     void drawTextCenter(Framebuffer* fb, const char* text, uint16_t color, int cx, int cy);
 
+    // Display rotation (0, 1, 2, 3 = 0°, 90°, 180°, 270°)
+    void setRotation(uint8_t rotation);
+
     uint16_t width() const { return width_; }
     uint16_t height() const { return height_; }
 
