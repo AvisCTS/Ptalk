@@ -33,6 +33,14 @@ struct AppMessage {
     event::AppEvent          app_event;
 };
 
+// ===================== Emotion parsing =====================
+
+state::EmotionState AppController::parseEmotionCode(const std::string& code) {
+    // Emotion parsing moved to NetworkManager::parseEmotionCode()
+    // This function kept for backward compatibility if needed
+    return NetworkManager::parseEmotionCode(code);
+}
+
 // ===================== Singleton =====================
 
 AppController& AppController::instance() {

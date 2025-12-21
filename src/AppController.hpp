@@ -111,6 +111,11 @@ public:
     // ======= Module accessors (for testing) =======
     DisplayManager* getDisplay() const { return display.get(); }
 
+    // ======= Emotion helpers =======
+    /// Parse emotion code from WebSocket message ("01" → HAPPY, "11" → SAD, etc.)
+    /// Returns NEUTRAL if code not recognized
+    static state::EmotionState parseEmotionCode(const std::string& code);
+
 private:
     AppController() = default;
     ~AppController();
