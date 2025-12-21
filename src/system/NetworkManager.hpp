@@ -130,6 +130,11 @@ private:
     // ======================================================
     void handleWifiStatus(int status_code);
     void handleWsStatus(int status_code);
+    
+    // Retry logic for initial WiFi connection
+    void retryWifiThenPortal();
+    static void retryWifiTaskEntry(void* arg);
+    
 
     // Receive message from WebSocketClient
     void handleWsTextMessage(const std::string& msg);
@@ -191,4 +196,7 @@ private:
     // OTA state
     bool firmware_download_active = false;
     uint32_t firmware_bytes_received = 0;
+    
+    // WiFi retry state
+    TaskHandle_t wifi_retry_task = nullptr;
 };

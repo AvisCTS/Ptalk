@@ -86,11 +86,16 @@ void NetworkManager::start()
         wifi->connectWithCredentials(config_.sta_ssid.c_str(), config_.sta_pass.c_str());
         publishState(state::ConnectivityState::CONNECTING_WIFI);
     } else {
-        // Try auto-connect (saved creds). If not available, start portal.
+        // Try auto-connect (saved creds). If not available, retry for 5s then portal.
         bool autoOk = wifi->autoConnect();
         if (!autoOk) {
-            wifi->startCaptivePortal(config_.ap_ssid, config_.ap_max_clients);
-            publishState(state::ConnectivityState::WIFI_PORTAL);
+            // No saved credentials - spawn retry task
+            ESP_LOGW(TAG, "No saved WiFi credentials - will retry for 5 seconds");
+            publishState(state::ConnectivityState::CONNECTING_WIFI);
+            
+            if (wifi_retry_task == nullptr) {
+                xTaskCreate(&NetworkManager::retryWifiTaskEntry, "wifi_retry", 4096, this, 5, &wifi_retry_task);
+            }
         } else {
             publishState(state::ConnectivityState::CONNECTING_WIFI);
         }
@@ -445,3 +450,59 @@ void NetworkManager::stopPortal()
         wifi->stopCaptivePortal();
     }
 }
+
+// ============================================================================
+// WIFI RETRY LOGIC
+// ============================================================================
+void NetworkManager::retryWifiTaskEntry(void* arg)
+{
+    auto* self = static_cast<NetworkManager*>(arg);
+    if (self) {
+        self->retryWifiThenPortal();
+    }
+    vTaskDelete(nullptr);
+}
+
+void NetworkManager::retryWifiThenPortal()
+{
+    const int max_retries = 10;  // 5 seconds / 0.5s = 10 attempts
+    
+    ESP_LOGI(TAG, "Starting WiFi retry phase (5 seconds, 10 attempts)");
+    
+    for (int attempt = 0; attempt < max_retries; attempt++) {
+        // Check if WiFi connected during retry
+        if (wifi && wifi->isConnected()) {
+            ESP_LOGI(TAG, "WiFi connected during retry phase - cancelling portal");
+            wifi_retry_task = nullptr;
+            return;
+        }
+        
+        ESP_LOGI(TAG, "WiFi retry attempt %d/10", attempt + 1);
+        
+        // Wait 500ms
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    
+    // Check one final time after all retries
+    if (wifi && wifi->isConnected()) {
+        ESP_LOGI(TAG, "WiFi connected after retry phase - cancelling portal");
+        wifi_retry_task = nullptr;
+        return;
+    }
+    
+    // 5 seconds elapsed without connection - scan then open portal
+    ESP_LOGI(TAG, "WiFi retry phase complete - no connection. Scanning then opening portal...");
+    
+    if (wifi) {
+        wifi->ensureStaStarted();
+        // Scan and cache networks before opening portal
+        wifi->scanAndCache();
+        
+        // Open portal with stop_wifi_first=true to ensure clean state
+        wifi->startCaptivePortal(config_.ap_ssid, config_.ap_max_clients, true);
+        publishState(state::ConnectivityState::WIFI_PORTAL);
+    }
+    
+    wifi_retry_task = nullptr;
+}
+

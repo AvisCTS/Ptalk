@@ -20,6 +20,19 @@ struct WifiInfo {
 };
 
 /**
+ * HandlerContext for HTTP server
+ * ---------------------------------------------------------
+ * - Context truyền vào HTTP handlers
+ */
+
+class WifiService;
+
+struct HandlerContext
+{
+    WifiService *svc;
+};
+
+/**
  * WifiService
  * ---------------------------------------------------------
  * - Init WiFi stack (NVS, netif, wifi driver)
@@ -40,7 +53,7 @@ public:
     bool autoConnect();
 
     // Bật portal
-    void startCaptivePortal(const std::string& ap_ssid = "PTalk",const uint8_t ap_num_connections = 4);
+    void startCaptivePortal(const std::string& ap_ssid = "PTalk", const uint8_t ap_num_connections = 4, bool stop_wifi_first = false);
     void stopCaptivePortal();
 
     // Ngắt STA
@@ -59,9 +72,15 @@ public:
 
     // Scan WiFi
     std::vector<WifiInfo> scanNetworks();
+    void scanAndCache();  // Scan and cache networks (to be called before portal)
+    std::vector<WifiInfo> getCachedNetworks() const { return cached_networks; }
+    void ensureStaStarted(); // Ensure STA mode is started
 
     // Callback status: 0=DISCONNECTED, 1=CONNECTING, 2=GOT_IP
     void onStatus(std::function<void(int)> cb) { status_cb = cb; }
+
+    // Control AP-only mode from external (e.g., HTTP handlers)
+    void setApOnlyMode(bool enabled) { ap_only_mode = enabled; }
 
 private:
     void loadCredentials();
@@ -86,12 +105,17 @@ private:
     bool connected = false;
     bool auto_connect_enabled = true;
     bool portal_running = false;
+    // When true, WifiService should operate in AP-only mode and ignore STA events
+    bool ap_only_mode = false;
     bool has_connected_once = false;  // Track if WiFi ever connected successfully
+    bool wifi_started = false;  // Track if WiFi has been started
 
     esp_netif_t* sta_netif = nullptr;
     esp_netif_t* ap_netif = nullptr;
 
     httpd_handle_t http_server = nullptr;
+    HandlerContext http_ctx{ this };
+    std::vector<WifiInfo> cached_networks;  // Cache WiFi scan results
 
     std::function<void(int)> status_cb = nullptr;
 };
