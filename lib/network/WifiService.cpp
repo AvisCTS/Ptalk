@@ -156,7 +156,8 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 }
 
 static esp_err_t connect_post_handler(httpd_req_t *req)
-{
+{   
+    ESP_LOGI(TAG, "HTTP POST %s", req->uri);
     HandlerContext *ctx = (HandlerContext *)req->user_ctx;
     if (!ctx)
         return ESP_FAIL;
@@ -219,6 +220,17 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
     httpd_resp_send(req, nullptr, 0);
     return ESP_OK;
 }
+
+/**
+ * Debug handler for any unhandled POST requests
+ */
+static esp_err_t any_post_handler(httpd_req_t* req)
+{
+    ESP_LOGW(TAG, "UNHANDLED POST %s", req->uri);
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No handler");
+    return ESP_OK;
+}
+
 
 static esp_err_t logo1_get_handler(httpd_req_t *req)
 {
@@ -329,6 +341,14 @@ void WifiService::startCaptivePortal(const std::string &ap_ssid, const uint8_t a
         connect_post.handler = connect_post_handler;
         connect_post.user_ctx = &http_ctx;
         httpd_register_uri_handler(http_server, &connect_post);
+
+        // Any other POST
+        httpd_uri_t any_post = {};
+        any_post.uri = "/*";
+        any_post.method = HTTP_POST;
+        any_post.handler = any_post_handler;
+        httpd_register_uri_handler(http_server, &any_post);
+
 
         // GET /logo1.jpg
         httpd_uri_t logo1_get = {};

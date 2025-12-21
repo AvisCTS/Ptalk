@@ -85,19 +85,20 @@ void NetworkManager::start()
     if (!config_.sta_ssid.empty() && !config_.sta_pass.empty()) {
         wifi->connectWithCredentials(config_.sta_ssid.c_str(), config_.sta_pass.c_str());
         publishState(state::ConnectivityState::CONNECTING_WIFI);
+        // Spawn retry task to open portal if connection fails
+        if (wifi_retry_task == nullptr) {
+            xTaskCreate(&NetworkManager::retryWifiTaskEntry, "wifi_retry", 4096, this, 5, &wifi_retry_task);
+        }
     } else {
-        // Try auto-connect (saved creds). If not available, retry for 5s then portal.
-        bool autoOk = wifi->autoConnect();
-        if (!autoOk) {
-            // No saved credentials - spawn retry task
-            ESP_LOGW(TAG, "No saved WiFi credentials - will retry for 5 seconds");
-            publishState(state::ConnectivityState::CONNECTING_WIFI);
-            
-            if (wifi_retry_task == nullptr) {
-                xTaskCreate(&NetworkManager::retryWifiTaskEntry, "wifi_retry", 4096, this, 5, &wifi_retry_task);
-            }
-        } else {
-            publishState(state::ConnectivityState::CONNECTING_WIFI);
+        // Try auto-connect (saved creds). If available, still spawn retry task for fallback.
+        wifi->autoConnect();
+        publishState(state::ConnectivityState::CONNECTING_WIFI);
+        
+        // Always spawn retry task - even with autoConnect, if WiFi fails to actually connect,
+        // we need the portal fallback after 5 seconds
+        if (wifi_retry_task == nullptr) {
+            ESP_LOGI(TAG, "Spawning WiFi retry task for fallback to portal if connection fails");
+            xTaskCreate(&NetworkManager::retryWifiTaskEntry, "wifi_retry", 4096, this, 5, &wifi_retry_task);
         }
     }
 
