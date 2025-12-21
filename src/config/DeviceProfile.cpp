@@ -39,7 +39,9 @@
 //
 // #include "assets/emotions/idle.hpp"
 // #include "assets/emotions/listening.hpp"
-// #include "assets/emotions/thinking.hpp"
+#include "../assets/emotions/happy.hpp"
+#include "../assets/emotions/sad.hpp"
+#include "../assets/emotions/thinking.hpp"
 // #include "assets/emotions/speaking.hpp"
 // #include "assets/emotions/error.hpp"
 // #include "assets/emotions/boot.hpp"
@@ -120,19 +122,31 @@ bool DeviceProfile::setup(AppController &app)
     display->enableStateBinding(true);
 
     // --- Register UI assets ---
-    // Uncomment sau khi có assets đã convert
+    // Convert generated animation structs to Animation1Bit format
+    
+    // Helper lambda to convert
+    auto registerEmotion1Bit = [&](const char* name, const asset::emotion::Animation& anim) {
+        Animation1Bit anim1bit;
+        anim1bit.width = anim.width;
+        anim1bit.height = anim.height;
+        anim1bit.frame_count = anim.frame_count;
+        anim1bit.fps = anim.fps;
+        anim1bit.loop = anim.loop;
+        anim1bit.base_frame = anim.base_frame();
+        anim1bit.frames = anim.frames();
+        display->registerEmotion(name, anim1bit);
+    };
 
     // Emotions (animations)
-    // display->registerEmotion("idle",        asset::emotion::IDLE);
-    // display->registerEmotion("listening",   asset::emotion::LISTENING);
-    // display->registerEmotion("thinking",    asset::emotion::THINKING);
-    // display->registerEmotion("speaking",    asset::emotion::SPEAKING);
-    // display->registerEmotion("error",       asset::emotion::ERROR);
-    // display->registerEmotion("boot",        asset::emotion::BOOT);
-    // display->registerEmotion("lowbat",      asset::emotion::LOWBAT);
-    // display->registerEmotion("maintenance", asset::emotion::IDLE);      // Tạm dùng IDLE
-    // display->registerEmotion("updating",    asset::emotion::THINKING);  // Tạm dùng THINKING
-    // display->registerEmotion("reset",       asset::emotion::ERROR);     // Tạm dùng ERROR
+    // registerEmotion1Bit("idle",        asset::emotion::IDLE);
+    // registerEmotion1Bit("listening",   asset::emotion::LISTENING);
+    registerEmotion1Bit("happy",       asset::emotion::HAPPY);
+    registerEmotion1Bit("sad",         asset::emotion::SAD);
+    registerEmotion1Bit("thinking",    asset::emotion::THINKING);
+    // registerEmotion1Bit("speaking",    asset::emotion::SPEAKING);
+    // registerEmotion1Bit("error",       asset::emotion::ERROR);
+    // registerEmotion1Bit("boot",        asset::emotion::BOOT);
+    // registerEmotion1Bit("lowbat",      asset::emotion::LOWBAT);
 
     // Icons (static images)
     // display->registerIcon("wifi_ok",         asset::icon::WIFI_OK);
