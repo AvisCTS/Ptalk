@@ -7,6 +7,7 @@
 #include "freertos/timers.h"
 
 class Power;
+class DisplayManager;
 
 class PowerManager {
 public:
@@ -37,6 +38,9 @@ public:
 
     // Force an immediate power evaluation (runs one sample now)
     void sampleNow();
+
+    // Link DisplayManager for battery % updates
+    void setDisplayManager(DisplayManager* display) { display_mgr = display; }
 
 private:
     static void timerCallbackStatic(TimerHandle_t timer);
@@ -69,4 +73,7 @@ private:
     bool battery_present = true;
 
     bool first_sample = true;
+
+    // Display manager link for battery % updates
+    DisplayManager* display_mgr = nullptr;
 };

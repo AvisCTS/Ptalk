@@ -1,4 +1,5 @@
 #include "PowerManager.hpp"
+#include "DisplayManager.hpp"
 #include "AppController.hpp"
 #include "../../lib/power/Power.hpp"        // driver của bạn
 #include "esp_log.h"
@@ -102,7 +103,10 @@ void PowerManager::timerCallback() {
     // DisplayManager subscribes PowerState directly and reads battery from power manager
     if (last_percent_sent != last_percent) {
         last_percent_sent = last_percent;
-        // NO direct AppController coupling - state-driven only
+        // Update DisplayManager with battery % (called once per change, not spam)
+        if (display_mgr) {
+            display_mgr->setBatteryPercent(last_percent);
+        }
     }
 
     auto newState = evaluateState(last_voltage, last_percent, charging, full);
