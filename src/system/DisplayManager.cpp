@@ -313,18 +313,18 @@ void DisplayManager::handleConnectivity(state::ConnectivityState s)
     switch (s) {
         case state::ConnectivityState::OFFLINE:
             // show text "Offline"
-            playText("Offline", 0xFFFF);  // white text
+            playText("Offline", -1, -1, 0xFFFF,1.5);  // centered, white text
             break;
 
         case state::ConnectivityState::CONNECTING_WIFI:
             // Show text "Connecting WiFi..."
-            playText("Connecting WiFi...", 0xFFFF);
+            playText("Connecting WiFi...", -1, -1, 0xFFFF,1.5);  // centered, white text
             break;
 
         case state::ConnectivityState::WIFI_PORTAL:
             // Show text "WiFi Portal Mode"
-            //playText("WiFi Portal Mode", 0xFFFF);
-            playEmotion("sad");
+            playText("WiFi Portal Mode", -1, -1, 0xFFFF,1.5);  // centered, white text
+            //playEmotion("sad");
             break;
 
         case state::ConnectivityState::CONNECTING_WS:
@@ -340,12 +340,12 @@ void DisplayManager::handleSystem(state::SystemState s)
 {
     switch (s) {
         case state::SystemState::BOOTING:
-            ESP_LOGI(TAG, "Displaying Booting message");
+            //ESP_LOGI(TAG, "Displaying Booting message");
             playText("PTIT", 40, 0, 0xF800, 2); //red
             break;
 
         case state::SystemState::RUNNING:
-            ESP_LOGI(TAG, "Displaying Running message");
+            //ESP_LOGI(TAG, "Displaying Running message");
             playEmotion("idle");
             break;
 
