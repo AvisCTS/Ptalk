@@ -11,17 +11,25 @@ Enterprise-grade firmware architecture for PTalk device, emphasizing clean separ
 
 ### Core States
 - **InteractionState**: IDLE, TRIGGERED, LISTENING, PROCESSING, SPEAKING, CANCELLING, MUTED, SLEEPING
+- **InputSource**: VAD, BUTTON, WAKEWORD, SERVER_COMMAND, SYSTEM, UNKNOWN (tracks what triggered the interaction)
 - **ConnectivityState**: OFFLINE, CONNECTING_WIFI, WIFI_PORTAL, CONNECTING_WS, ONLINE
 - **SystemState**: BOOTING, RUNNING, ERROR, MAINTENANCE, UPDATING_FIRMWARE, FACTORY_RESETTING
 - **PowerState**: NORMAL, LOW_BATTERY, CHARGING, FULL_BATTERY, POWER_SAVING, CRITICAL, ERROR
+- **EmotionState**: NEUTRAL, HAPPY, SAD, ANGRY, CONFUSED, EXCITED, CALM, THINKING (server-driven emotions)
 
 ### Key Properties
 - ✅ **Thread-Safe**: Uses mutex + copy callbacks before notifying
 - ✅ **No State Loops**: Callbacks copy before execution (prevents modification during iteration)
 - ✅ **Subscription IDs**: Returns int ID for unsubscribe tracking
+- ✅ **Input Source Tracking**: InteractionState callbacks include InputSource parameter
 
 ```cpp
-auto id = StateManager::instance().subscribeInteraction([this](auto s, auto src) { });
+// Interaction callback includes InputSource
+auto id = StateManager::instance().subscribeInteraction(
+    [this](state::InteractionState s, state::InputSource src) {
+        // Handle state change with source context
+    }
+);
 // Later...
 StateManager::instance().unsubscribeInteraction(id);
 ```
@@ -50,9 +58,10 @@ void stop();      // Shutdown gracefully (reverse of start)
 
 #### **DisplayManager**
 - **Role**: UI/Animation layer
-- **Responsibility**: All visual output (UI updates, animations, toasts)
-- **Subscriptions**: InteractionState, ConnectivityState, SystemState, PowerState
+- **Responsibility**: All visual output (UI updates, animations, toasts, emotion displays)
+- **Subscriptions**: InteractionState, ConnectivityState, SystemState, PowerState, EmotionState
 - **Key Point**: Subscribe directly; NO coupling to AppController for UI
+- **Emotion System**: Displays emotion animations based on server emotion codes ("01"→HAPPY, "11"→SAD, etc.)
 
 #### **AudioManager**
 - **Role**: Audio I/O + state machine
@@ -120,8 +129,13 @@ AppController::stop()
   → StateManager.setPowerState()/setInteractionState()
   → Notify subscribers (in order):
      1. AppController (queue message)
-     2. DisplayManager (direct call)
-     3. AudioManager (direct call)
+     2. DisplayManager (direct call - UI updates)
+     3. AudioManager (direct call - audio state machine)
+
+[Server Emotion Code]
+  → NetworkManager receives "01", "11", etc.
+  → StateManager.setEmotionState(HAPPY/SAD/etc.)
+  → DisplayManager renders emotion animation
 ```
 
 ### Event-Driven Flow
@@ -176,11 +190,18 @@ ESP_LOGI(TAG, "ConnectivityState: 4 (change)");
 | Task | Priority | Stack | Core | Purpose |
 |------|----------|-------|------|---------|
 | AppControllerTask | 4 | 4096B | 1 | State/event processing |
-| DisplayLoop | 5 | 4096B | 1 | UI rendering (~30 FPS) |
-| AudioMic | 5 | 4096B | 0 | Microphone capture |
-| AudioSpk | 5 | 4096B | 0 | Speaker playback |
-| NetworkTask | 4 | 8192B | 0 | WiFi/WebSocket |
+| DisplayLoop | 3 | 4096B | 1 | UI rendering (~30 FPS) |
+| AudioMicTask | 5 | 4096B | 0 | Microphone capture |
+| AudioCodecTask | 4 | 8192B | 0 | ADPCM/Opus codec processing |
+| AudioSpkTask | 3 | 4096B | 1 | Speaker playback |
+| NetworkLoop | 5 | 8192B | Any | WiFi/WebSocket management |
+| wifi_retry | 5 | 4096B | Any | WiFi reconnection (temp) |
 | PowerTimer | (timer) | - | - | Battery sampling |
+
+**Notes:**
+- AudioSpkTask on Core 1 for smooth playback without WiFi interference
+- AudioCodecTask handles decode operations (ADPCM → PCM)
+- NetworkLoop has no affinity (tskNO_AFFINITY) for flexibility
 
 ---
 
@@ -190,14 +211,30 @@ ESP_LOGI(TAG, "ConnectivityState: 4 (change)");
 ```cpp
 auto display = std::make_unique<DisplayManager>();
 auto audio = std::make_unique<AudioManager>();
-// ... setup ...
-app.attachModules(std::move(display), std::move(audio), ...);
+auto network = std::make_unique<NetworkManager>();
+auto power = std::make_unique<PowerManager>();
+auto touch = std::make_unique<TouchInput>();
+auto ota = std::make_unique<OTAUpdater>();
+
+// Configure display with driver, framebuffer, animation player
+display->attachDriver(std::move(driver), std::move(fb), std::move(anim));
+
+// Configure audio with input, output, codec
+audio->attachCodec(std::move(codec));
+audio->attachInput(std::move(mic));
+audio->attachOutput(std::move(spk));
+
+// Attach all modules to AppController
+app.attachModules(std::move(display), std::move(audio), 
+                  std::move(network), std::move(power),
+                  std::move(touch), std::move(ota));
 ```
 
 **Benefits:**
 - ✅ Managers don't create own dependencies
 - ✅ Easy to mock for testing
 - ✅ Clear ownership chain
+- ✅ Flexible configuration per device profile
 
 ---
 
@@ -299,7 +336,59 @@ PowerManager samples voltage < CRITICAL_THRESHOLD
 
 ---
 
-## 14. Testing Strategy
+## 14. Emotion System Architecture
+
+### Server-Driven Emotion Display
+
+**Flow:**
+```
+Server (during SPEAKING) sends emotion code
+  → NetworkManager receives WebSocket message
+  → Parse emotion code ("01" → HAPPY, "11" → SAD)
+  → StateManager.setEmotionState(emotion)
+  → DisplayManager subscription triggered
+  → Load and play emotion animation
+```
+
+### Emotion Code Mapping
+
+| Code | Emotion | Animation | Use Case |
+|------|---------|-----------|----------|
+| "00" | NEUTRAL | Default face | Normal responses |
+| "01" | HAPPY | Cheerful smile | Positive, friendly responses |
+| "02" | ANGRY | Alert expression | Urgent warnings |
+| "03" | EXCITED | Surprised delight | Enthusiastic responses |
+| "11" | SAD | Concerned look | Empathetic, supportive |
+| "12" | CONFUSED | Uncertain face | Clarification needed |
+| "13" | CALM | Peaceful expression | Soothing responses |
+| "99" | THINKING | Processing animation | Internal processing |
+
+### Implementation Details
+
+**NetworkManager:**
+- Parses emotion codes from WebSocket messages
+- Static method `parseEmotionCode(code)` converts string → EmotionState
+- Sets StateManager emotion during SPEAKING phase
+
+**DisplayManager:**
+- Subscribes to EmotionState changes
+- Loads emotion animations from assets (happy.hpp, sad.hpp, etc.)
+- Plays emotion animation while SPEAKING
+- Returns to NEUTRAL after interaction ends
+
+**Asset Requirements:**
+- Emotion animations stored in `src/assets/emotions/`
+- Converted using `scripts/convert_assets.py`
+- Format: GIF → C++ header with frame data
+- Currently implemented: HAPPY, SAD, THINKING
+
+### References
+- See [EMOTION_SYSTEM.md](EMOTION_SYSTEM.md) for detailed documentation
+- See [EMOTION_REFACTOR_SUMMARY.md](EMOTION_REFACTOR_SUMMARY.md) for implementation history
+
+---
+
+## 15. Testing Strategy
 
 ```cpp
 // Mock StateManager
@@ -320,7 +409,28 @@ EXPECT_CALL(mockAudio, startListening).Times(1);
 ---
 
 ## References
+
+### Core Architecture
 - **StateManager**: `src/system/StateManager.{hpp,cpp}`
+- **StateTypes**: `src/system/StateTypes.hpp` (all state enums)
 - **AppController**: `src/AppController.{hpp,cpp}`
-- **Managers**: `src/system/{Display,Audio,Network,Power}Manager.{hpp,cpp}`
-- **Device Setup**: `src/DeviceProfile.{hpp,cpp}`
+- **Device Setup**: `src/config/DeviceProfile.{hpp,cpp}`
+
+### Managers
+- **DisplayManager**: `src/system/DisplayManager.{hpp,cpp}`
+- **AudioManager**: `src/system/AudioManager.{hpp,cpp}`
+- **NetworkManager**: `src/system/NetworkManager.{hpp,cpp}`
+- **PowerManager**: `src/system/PowerManager.{hpp,cpp}`
+- **OTAUpdater**: `src/system/OTAUpdater.{hpp,cpp}`
+
+### Drivers & Libraries
+- **Display**: `lib/display/` (DisplayDriver, Framebuffer, AnimationPlayer)
+- **Audio**: `lib/audio/` (I2S input/output, ADPCM/Opus codecs)
+- **Network**: `lib/network/` (WiFi, WebSocket)
+- **Touch**: `lib/touch/TouchInput.{hpp,cpp}`
+- **Power**: `lib/power/Power.{hpp,cpp}`
+
+### Documentation
+- **Emotion System**: `docs/EMOTION_SYSTEM.md`
+- **Architecture**: `docs/ARCHITECTURE.md` (this file)
+- **Software Architecture**: `docs/Software_Architecture.md`
