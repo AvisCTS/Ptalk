@@ -383,7 +383,7 @@ void WifiService::stopCaptivePortal()
     portal_running = false;
     ap_only_mode = false;
     cached_networks.clear(); // Clear cached networks
-
+    ESP_LOGI(TAG, "Captive portal stopped");
     // try to start STA with saved creds
     loadCredentials();
     if (!sta_ssid.empty())
@@ -397,6 +397,7 @@ void WifiService::disconnect()
     connected = false;
     if (status_cb)
         status_cb(0);
+    ESP_LOGI(TAG, "WiFi disconnected");
 }
 
 void WifiService::disableAutoConnect()
@@ -617,6 +618,11 @@ void WifiService::ipEventHandler(esp_event_base_t base, int32_t id, void *event)
         has_connected_once = true;
         if (status_cb)
             status_cb(2);
+        if (portal_running)
+        {
+            // Stop portal if running
+            stopCaptivePortal();
+        }
         ESP_LOGI(TAG, "Got IP - WiFi connected");
     }
 }
