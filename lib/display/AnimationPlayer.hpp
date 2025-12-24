@@ -29,8 +29,9 @@ struct Animation1Bit {
     const asset::emotion::FrameInfo* frames = nullptr;       // Array of frame infos
 
     bool valid() const { 
+        // Support animations with diff-only frame 0 (no base_frame)
         return width > 0 && height > 0 && frame_count > 0 && 
-               base_frame != nullptr && frames != nullptr; 
+               frames != nullptr; 
     }
 };
 

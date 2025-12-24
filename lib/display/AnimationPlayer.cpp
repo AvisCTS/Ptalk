@@ -79,10 +79,9 @@ void AnimationPlayer::setAnimation(const Animation1Bit& anim, int x, int y)
         }
     }
 
-    // Copy base frame (frame 0) into packed buffer
-    if (anim.base_frame) {
-        memcpy(packed_frame_, anim.base_frame, packed_size);
-    }
+    // Clear frame buffer to black (all pixels = 0)
+    // Since frame 0 is now a diff from black screen, we start with black
+    memset(packed_frame_, 0, packed_size);
 
     ESP_LOGI(TAG, "Animation set: %d frames (%dx%d), fps=%u, loop=%s | scanline=%zuB, packed=%zuB",
              anim.frame_count, anim.width, anim.height, anim.fps,
@@ -121,9 +120,15 @@ void AnimationPlayer::update(uint32_t dt_ms)
 
         if (frame_index_ >= (size_t)current_anim_.frame_count) {
             if (current_anim_.loop) {
-                // Loop back to frame 0
+                // Loop back to frame 0: clear to black and apply frame 0 diff
                 frame_index_ = 0;
-                memcpy(packed_frame_, current_anim_.base_frame, packed_frame_size_);
+                memset(packed_frame_, 0, packed_frame_size_);
+                
+                // Apply frame 0 diff (from black screen)
+                const asset::emotion::FrameInfo& frame_info = current_anim_.frames[0];
+                if (frame_info.diff != nullptr) {
+                    applyDiffBlock(frame_info.diff);
+                }
             } else {
                 // one-shot animation stops
                 frame_index_ = current_anim_.frame_count - 1;
