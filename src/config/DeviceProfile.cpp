@@ -67,6 +67,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frame_count = asset::emotion::HAPPY.frame_count;
         anim1bit.fps = asset::emotion::HAPPY.fps;
         anim1bit.loop = asset::emotion::HAPPY.loop;
+        anim1bit.max_packed_size = asset::emotion::HAPPY.max_packed_size;
         // Frame 0 is diff from black → no base_frame
         anim1bit.base_frame = nullptr;
         anim1bit.frames = asset::emotion::HAPPY.frames();
@@ -81,6 +82,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frame_count = asset::emotion::SAD.frame_count;
         anim1bit.fps = asset::emotion::SAD.fps;
         anim1bit.loop = asset::emotion::SAD.loop;
+        anim1bit.max_packed_size = asset::emotion::SAD.max_packed_size;
         anim1bit.base_frame = nullptr;
         anim1bit.frames = asset::emotion::SAD.frames();
         display->registerEmotion("sad", anim1bit);
@@ -94,6 +96,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frame_count = asset::emotion::THINKING.frame_count;
         anim1bit.fps = asset::emotion::THINKING.fps;
         anim1bit.loop = asset::emotion::THINKING.loop;
+        anim1bit.max_packed_size = asset::emotion::THINKING.max_packed_size;
         anim1bit.base_frame = nullptr;
         anim1bit.frames = asset::emotion::THINKING.frames();
         display->registerEmotion("thinking", anim1bit);
@@ -107,6 +110,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frame_count = asset::emotion::STUN.frame_count;
         anim1bit.fps = asset::emotion::STUN.fps;
         anim1bit.loop = asset::emotion::STUN.loop;
+        anim1bit.max_packed_size = asset::emotion::STUN.max_packed_size;
         anim1bit.base_frame = nullptr;
         anim1bit.frames = asset::emotion::STUN.frames();
         display->registerEmotion("stun", anim1bit);
@@ -213,7 +217,7 @@ bool DeviceProfile::setup(AppController &app)
     // =========================================================
     auto display_mgr = std::make_unique<DisplayManager>();
 
-    // --- Display driver config (ST7789 240x240) ---
+    // --- Display driver config (ST7789 240x320) ---
     DisplayDriver::Config lcd_cfg{
         .spi_host = device_cfg::display.spi_host,
         .pin_cs = device_cfg::display.pin_cs,
@@ -223,9 +227,12 @@ bool DeviceProfile::setup(AppController &app)
         .pin_mosi = device_cfg::display.pin_mosi,
         .pin_sclk = device_cfg::display.pin_sclk,
 
-        // Try Y offset 80 for panels with 240x240 active area in 240x320 memory
+        .width = 240,
+        .height = 320,
+
+        // 240x320 full screen (no offset needed)
         .x_offset = 0,
-        .y_offset = 80, // Map 240x240 window into 240x320 GRAM (common ST7789)
+        .y_offset = 0,
         .spi_speed_hz = device_cfg::display.spi_speed_hz};
 
     auto lcd_driver = std::make_unique<DisplayDriver>();
@@ -236,7 +243,7 @@ bool DeviceProfile::setup(AppController &app)
         return false;
     }
 
-    if (!display_mgr->init(std::move(lcd_driver), 240, 240))
+    if (!display_mgr->init(std::move(lcd_driver), 240, 320))
     {
         ESP_LOGE(TAG, "DisplayManager init failed");
         return false;

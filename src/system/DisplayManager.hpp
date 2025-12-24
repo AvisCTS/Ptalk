@@ -18,7 +18,7 @@
 
 // Forward declarations
 class DisplayDriver;       // ST7789 low-level driver
-class Framebuffer;         // Offscreen buffer
+// Framebuffer removed - direct rendering architecture
 class AnimationPlayer;     // Multi-frame animation engine
 
 // ----------------------------------------------------------------------------
@@ -59,7 +59,7 @@ public:
 
     // Initialize with low-level display driver
     // Takes ownership of the low-level driver to ensure lifetime matches the UI
-    bool init(std::unique_ptr<DisplayDriver> driver, int width = 240, int height = 240);
+    bool init(std::unique_ptr<DisplayDriver> driver, int width = 240, int height = 320);
 
     // Real-time update (should be called every 20–50ms)
     void update(uint32_t dt_ms);
@@ -146,6 +146,7 @@ private:
     void handleConnectivity(state::ConnectivityState s);
     void handleSystem(state::SystemState s);
     void handlePower(state::PowerState s);
+    void handleEmotion(state::EmotionState s);
 
     // Internal asset playback
     void playIcon(const std::string& name,
@@ -156,7 +157,7 @@ private:
 
 private:
     std::unique_ptr<DisplayDriver> drv; // owned low-level driver
-    std::unique_ptr<Framebuffer> fb;
+    // No Framebuffer - direct rendering to display!
     std::unique_ptr<AnimationPlayer> anim_player;
 
     // asset tables
@@ -165,14 +166,20 @@ private:
 
     // battery
     uint8_t battery_percent = 255;
+    uint8_t prev_battery_percent = 255;  // Track previous value to avoid redraw
 
     // text playback state (mutually exclusive with animation)
     bool text_active_ = false;
+    bool text_mode_cleared_ = false;  // Track if screen cleared for text mode
     std::string text_msg_{};
     int text_x_ = -1;
     int text_y_ = -1;
     uint16_t text_color_ = 0xFFFF;
     int text_scale_ = 1;
+
+    // icon playback state (mutually exclusive with animation)
+    bool icon_active_ = false;
+    bool icon_mode_cleared_ = false;  // Track if screen cleared for icon mode
 
     // (toast system removed)
 
@@ -189,6 +196,7 @@ private:
     int sub_conn = -1;
     int sub_sys  = -1;
     int sub_power = -1;
+    int sub_emotion = -1;
 
     bool binding_enabled = false;
 

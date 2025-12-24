@@ -1,6 +1,6 @@
 #include "DisplayManager.hpp"
 #include "DisplayDriver.hpp"
-#include "Framebuffer.hpp"
+// Framebuffer.hpp removed - using direct rendering
 #include "AnimationPlayer.hpp"
 
 #include <utility>
@@ -24,6 +24,7 @@ DisplayManager::~DisplayManager() {
         if (sub_conn   != -1) sm.unsubscribeConnectivity(sub_conn);
         if (sub_sys    != -1) sm.unsubscribeSystem(sub_sys);
         if (sub_power  != -1) sm.unsubscribePower(sub_power);
+        if (sub_emotion!= -1) sm.unsubscribeEmotion(sub_emotion);
     }
 }
 
@@ -41,10 +42,15 @@ bool DisplayManager::init(std::unique_ptr<DisplayDriver> driver, int width, int 
     width_ = width;
     height_ = height;
 
-    fb = std::make_unique<Framebuffer>(width, height);
-    anim_player = std::make_unique<AnimationPlayer>(fb.get(), drv.get());
+    drv->setRotation(1); // Landscape
+    // Sync dimensions after rotation (driver swaps width↔height for landscape)
+    width_ = drv->width();
+    height_ = drv->height();
 
-    ESP_LOGI(TAG, "DisplayManager init OK (%dx%d)", width, height);
+    // AnimationPlayer renders directly to display - no framebuffer needed!
+    anim_player = std::make_unique<AnimationPlayer>(drv.get());
+
+    ESP_LOGI(TAG, "DisplayManager init OK (%dx%d) - Framebuffer-less architecture", width, height);
     return true;
 }
 
@@ -61,7 +67,7 @@ bool DisplayManager::startLoop(uint32_t interval_ms,
         update_interval_ms_ = interval_ms;
         return true;
     }
-    if (!drv || !fb || !anim_player) {
+    if (!drv || !anim_player) {
         ESP_LOGE(TAG, "startLoop: not initialized");
         return false;
     }
@@ -149,6 +155,10 @@ void DisplayManager::enableStateBinding(bool enable)
         this->handlePower(s);
     });
 
+    sub_emotion = sm.subscribeEmotion([this](state::EmotionState s) {
+        this->handleEmotion(s);
+    });
+
     ESP_LOGI(TAG, "DisplayManager state binding enabled");
 }
 
@@ -202,66 +212,57 @@ void DisplayManager::registerIcon(const std::string& name, const Icon& icon) {
 // Update (should be called from UI task)
 void DisplayManager::update(uint32_t dt_ms)
 {
-    if (!fb || !drv) return;
+    if (!drv) return;
+
+    // Sync dimensions from driver (in case rotation changed)
+    width_ = drv->width();
+    height_ = drv->height();
 
     // ✅ DEBUG: Log first update to verify task is running
     static bool first_update = true;
     if (first_update) {
-        ESP_LOGI(TAG, "First update() called - display loop is working");
+        ESP_LOGI(TAG, "First update() called - display loop is working, dimensions=%dx%d", width_, height_);
         first_update = false;
     }
 
     // 0) If text mode active, render text only (no animation)
     if (text_active_) {
-        fb->clear(0x0000);
-        int draw_x = text_x_;
-        int draw_y = text_y_;
-        const int text_width = static_cast<int>(text_msg_.size()) * 8 * text_scale_;
-        const int text_height = 8 * text_scale_;
-        if (draw_x < 0) {
-            draw_x = (width_ - text_width) / 2;
+        // Only clear once when entering text mode
+        if (!text_mode_cleared_) {
+            drv->fillScreen(0x0000);
+            text_mode_cleared_ = true;
         }
-        if (draw_y < 0) {
-            draw_y = (height_ - text_height) / 2;
+        if (!text_msg_.empty()) {
+            drv->drawTextCenter(text_msg_.c_str(), text_color_, width_ / 2, height_ / 2, text_scale_);  // Center of screen
         }
-        drv->drawText(fb.get(), text_msg_.c_str(), text_color_, draw_x, draw_y, text_scale_);
-        if (battery_percent < 101) {  // Valid: 0-100%
-            // Clear previous battery text area first
-            for (int x = width_ - 50; x < width_; x++) {
-                for (int y = 0; y < 20; y++) {
-                    fb->drawPixel(x, y, 0x0000);  // black
-                }
-            }
-            std::string bat_str = std::to_string(battery_percent) + "%";
-            drv->drawText(fb.get(), bat_str.c_str(), 0xFFFF, width_-32, 5);
-        }
-        drv->flush(fb.get());
         return;
+    } else {
+        // Reset flag when not in text mode
+        text_mode_cleared_ = false;
     }
 
     // 1) update animation frame
     anim_player->update(dt_ms);
     
-    // ✅ 2) Render animation frame to framebuffer
+    // 2) Render animation frame directly to display (no framebuffer!)
     anim_player->render();
 
-    // 3) draw icon if needed
-    // (icons are drawn as overlay → always on top)
-    // (you can extend later with battery percent etc.)
-
-    // (toast drawing removed)
-    // 4) draw battery percent if available
-    if (battery_percent != 255) {        // Clear previous battery text area first (top-right corner)
-        for (int x = width_ - 50; x < width_; x++) {
-            for (int y = 0; y < 20; y++) {
-                fb->drawPixel(x, y, 0x0000);  // black
-            }
-        }        std::string bat_str = std::to_string(battery_percent) + "%";
-        drv->drawText(fb.get(), bat_str.c_str(), 0xFFFF, width_ - 32, 5);
+    // 3) Overlay battery percentage (top-right corner)
+    // Note: Drawn over animation, cleared by next animation frame
+    if (battery_percent < 255) {
+        // Only redraw if battery percent changed
+        if (battery_percent != prev_battery_percent) {
+            // Clear old text area (assume max width of "100%" = 4 chars * 8 pixels = 32px)
+            int text_x = width_ - 40;  // 40px from right edge
+            drv->fillRect(text_x, 5, 40, 8, 0x0000);  // Clear 40x8 black rectangle
+            
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d%%", battery_percent);
+            drv->drawText(buf, 0xFFFF, text_x, 5, 1);  // White text, top-right
+            
+            prev_battery_percent = battery_percent;
+        }
     }
-
-    // 5) push framebuffer to display
-    drv->flush(fb.get());
 }
 
 void DisplayManager::taskEntry(void* arg)
@@ -411,6 +412,32 @@ void DisplayManager::handlePower(state::PowerState s)
     }
 }
 
+void DisplayManager::handleEmotion(state::EmotionState s)
+{
+    // Map emotion state to an available emotion asset
+    switch (s) {
+        case state::EmotionState::HAPPY:
+            playEmotion("happy");
+            break;
+        case state::EmotionState::SAD:
+            playEmotion("sad");
+            break;
+        case state::EmotionState::THINKING:
+            playEmotion("thinking");
+            break;
+        case state::EmotionState::CONFUSED:
+            playEmotion("stun");
+            break;
+        case state::EmotionState::NEUTRAL:
+        case state::EmotionState::CALM:
+        case state::EmotionState::EXCITED:
+        case state::EmotionState::ANGRY:
+        default:
+            //playEmotion("idle");
+            break;
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Internal asset playback
 void DisplayManager::playEmotion(const std::string& name, int x, int y)
@@ -454,6 +481,7 @@ void DisplayManager::playText(const std::string& text, int x, int y, uint16_t co
 void DisplayManager::clearText()
 {
     text_active_ = false;
+    text_mode_cleared_ = false;  // Reset clear flag
     text_msg_.clear();
 }
 
@@ -506,14 +534,12 @@ void DisplayManager::playIcon(const std::string& name,
     if (draw_y < 0) draw_y = 0;
 
     ESP_LOGI(TAG, "drawBitmap at (%d,%d)", draw_x, draw_y);
-    fb->drawBitmap(draw_x, draw_y, ico.w, ico.h, ico.rgb);
-
-    // Push immediately so critical/one-shot icons show even if the loop stops soon
+    
+    // Draw icon directly to display (no framebuffer)
     if (drv) {
-        ESP_LOGI(TAG, "Flushing framebuffer immediately");
-        drv->flush(fb.get());
+        drv->drawBitmap(draw_x, draw_y, ico.w, ico.h, ico.rgb);
     } else {
-        ESP_LOGW(TAG, "drv is null, cannot flush");
+        ESP_LOGW(TAG, "drv is null, cannot draw icon");
     }
 }
 
@@ -530,12 +556,11 @@ void DisplayManager::showOTAUpdating()
     ota_progress_percent = 0;
     ota_status_text = "Starting update...";
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
-    fb->clear(0x0000);  // Clear screen (black background)
+    drv->fillScreen(0x0000);  // OTA screen: full clear needed
     // TODO: Draw "Updating Firmware" title and progress bar outline
     // TODO: Display initial message
-    drv->flush(fb.get());
 }
 
 void DisplayManager::setOTAProgress(uint8_t current_percent)
@@ -544,16 +569,15 @@ void DisplayManager::setOTAProgress(uint8_t current_percent)
     
     ota_progress_percent = current_percent;
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
     // Update progress bar on display (0-100%)
     // TODO: Draw progress bar visual
     // Example: draw bar from left to right
     // int bar_width = (width_ * current_percent) / 100;
-    // fb->drawRect(10, 120, bar_width, 20, 0x07E0);  // green bar
+    // drv->drawBitmap(...);  // Draw progress bar scanline
     
     ESP_LOGD(TAG, "OTA progress: %u%%", current_percent);
-    drv->flush(fb.get());
 }
 
 void DisplayManager::setOTAStatus(const std::string& status)
@@ -561,11 +585,10 @@ void DisplayManager::setOTAStatus(const std::string& status)
     ota_status_text = status;
     ESP_LOGI(TAG, "OTA status: %s", status.c_str());
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
     // TODO: Display status text on screen
     // Example: show at bottom of screen
-    drv->flush(fb.get());
 }
 
 void DisplayManager::showOTACompleted()
@@ -577,12 +600,11 @@ void DisplayManager::showOTACompleted()
     ota_progress_percent = 100;
     ota_status_text = "Update completed!";
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
-    fb->clear(0x0000);
+    drv->fillScreen(0x0000);
     // TODO: Draw checkmark or success animation
     // TODO: Display "Update Successful" message
-    drv->flush(fb.get());
 }
 
 void DisplayManager::showOTAError(const std::string& error_msg)
@@ -594,12 +616,11 @@ void DisplayManager::showOTAError(const std::string& error_msg)
     ota_error_msg = error_msg;
     ota_status_text = "Update failed!";
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
-    fb->clear(0x0000);
+    drv->fillScreen(0x0000);
     // TODO: Draw error icon (X mark)
     // TODO: Display error message
-    drv->flush(fb.get());
 }
 
 void DisplayManager::showRebooting()
@@ -610,10 +631,9 @@ void DisplayManager::showRebooting()
     ota_error = false;
     ota_status_text = "Rebooting...";
     
-    if (!fb || !drv) return;
+    if (!drv) return;
     
-    fb->clear(0x0000);
+    drv->fillScreen(0x0000);
     // TODO: Draw rebooting animation or countdown
     // TODO: Display "Device restarting..." message
-    drv->flush(fb.get());
 }
