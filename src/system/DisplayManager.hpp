@@ -43,7 +43,7 @@ public:
     struct Icon {
         int w = 0;
         int h = 0;
-        const uint16_t* rgb = nullptr;
+        const uint8_t* rle_data = nullptr;
     };
 
     enum class IconPlacement {
