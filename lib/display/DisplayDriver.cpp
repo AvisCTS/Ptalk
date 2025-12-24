@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "DisplayDriver.hpp"
 #include "Font8x8.hpp"
 #include "esp_log.h"
@@ -466,6 +468,73 @@ void DisplayDriver::drawTextCenter(const char *text, uint16_t color, int cx, int
     int y = cy - 4 * scale;
 
     drawText(text, color, x, y, scale);
+}
+
+// Decode và vẽ icon RLE 2-bit (4 mức xám) trực tiếp lên màn hình
+void DisplayDriver::drawRLE2bitIcon(int x,
+                                    int y,
+                                    int w,
+                                    int h,
+                                    const uint8_t *rle_data)
+{
+    if (!initialized || !rle_data || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    // Set drawing window
+    setAddressWindow(x, y, x + w - 1, y + h - 1);
+    gpio_set_level((gpio_num_t)cfg_.pin_dc, 1);
+
+    // Allocate line buffer (1 line RGB565)
+    uint16_t *line_buf = (uint16_t *)malloc(w * sizeof(uint16_t));
+    if (!line_buf)
+    {
+        return;
+    }
+
+    const uint8_t *src = rle_data;
+
+    uint8_t run_count = 0;
+    uint8_t run_value = 0;
+
+    for (int row = 0; row < h; row++)
+    {
+        int col = 0;
+
+        while (col < w)
+        {
+
+            // Load next RLE token if needed
+            if (run_count == 0)
+            {
+                run_count = *src++;
+                run_value = *src++;
+            }
+
+            uint8_t gray2 = run_value & 0x03; // 2-bit grayscale
+            uint8_t gray = gray2 * 85;        // 0,85,170,255
+
+            uint16_t color =
+                ((gray >> 3) << 11) | // R
+                ((gray >> 2) << 5) |  // G
+                (gray >> 3);          // B
+
+            int run = std::min<int>(run_count, w - col);
+
+            for (int i = 0; i < run; i++)
+            {
+                line_buf[col++] = color;
+            }
+
+            run_count -= run;
+        }
+
+        // Send one full line
+        sendData((uint8_t *)line_buf, w * sizeof(uint16_t));
+    }
+
+    free(line_buf);
 }
 
 // Display rotation (0, 1, 2, 3 = 0°, 90°, 180°, 270°)

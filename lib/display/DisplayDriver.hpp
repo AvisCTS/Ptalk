@@ -38,6 +38,7 @@ public:
     };
 
 public:
+   
     DisplayDriver();
     ~DisplayDriver();
 
@@ -60,6 +61,8 @@ public:
     void drawText(const char* text, uint16_t color, int x, int y, int scale = 1);
     void drawTextCenter(const char* text, uint16_t color, int cx, int cy, int scale = 1);
 
+
+     void drawRLE2bitIcon(int x, int y, int w, int h, const uint8_t *rle_data);
     // Set address window for streaming/scanline rendering
     // x0, y0: top-left; x1, y1: bottom-right (inclusive)
     void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
