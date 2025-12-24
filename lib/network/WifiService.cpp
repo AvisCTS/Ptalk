@@ -287,8 +287,12 @@ void WifiService::init()
 bool WifiService::autoConnect()
 {
     loadCredentials();
-    if (sta_ssid.empty())
+    if (sta_ssid.empty()) {
+        ESP_LOGW(TAG, "autoConnect: No saved credentials found");
         return false;
+    }
+    ESP_LOGI(TAG, "autoConnect: Attempting to connect with saved credentials (SSID: %s, Pass: %s)", 
+             sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
     startSTA();
     return true;
 }
@@ -423,9 +427,20 @@ void WifiService::connectWithCredentials(const char *ssid, const char *pass)
 {
     if (!ssid)
         return;
+    
+    ESP_LOGI(TAG, "connectWithCredentials: Received new credentials (SSID: %s, Pass: %s)",
+             ssid, pass && strlen(pass) > 0 ? "<set>" : "<empty>");
+    
+    // Stop portal if it's running to allow STA mode
+    if (portal_running) {
+        ESP_LOGI(TAG, "Portal running - stopping before STA connect");
+        stopCaptivePortal();
+    }
+    
     sta_ssid = ssid;
     sta_pass = pass ? pass : std::string();
     saveCredentials(ssid, pass ? pass : "");
+    ESP_LOGI(TAG, "Credentials saved. Initiating STA connection...");
     startSTA();
 }
 
@@ -532,6 +547,9 @@ void WifiService::startSTA()
         return;
     }
 
+    ESP_LOGI(TAG, "startSTA: Configuring WiFi STA mode (SSID: %s, Pass: %s)",
+             sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
+
     wifi_config_t cfg = {};
     strncpy(reinterpret_cast<char *>(cfg.sta.ssid), sta_ssid.c_str(), sizeof(cfg.sta.ssid) - 1);
     strncpy(reinterpret_cast<char *>(cfg.sta.password), sta_pass.c_str(), sizeof(cfg.sta.password) - 1);
@@ -540,7 +558,8 @@ void WifiService::startSTA()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     wifi_started = true;
-    ESP_LOGI(TAG, "Connecting to SSID: %s", sta_ssid.c_str());
+    ESP_LOGI(TAG, "WiFi STA started. Connecting to SSID: %s (password: %s)", 
+             sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
     esp_wifi_connect();
 
     if (status_cb)
