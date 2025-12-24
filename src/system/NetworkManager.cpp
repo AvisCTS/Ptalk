@@ -504,7 +504,14 @@ void NetworkManager::retryWifiThenPortal()
     ESP_LOGI(TAG, "WiFi retry phase complete - no connection. Scanning then opening portal...");
     
     if (wifi) {
+        // Disconnect STA first to allow scanning
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay to ensure WiFi is stopped
+        
+        // Start STA mode and scan
         wifi->ensureStaStarted();
+        vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay before scanning
+        
         // Scan and cache networks before opening portal
         wifi->scanAndCache();
         
