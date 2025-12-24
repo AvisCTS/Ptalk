@@ -271,7 +271,7 @@ bool DeviceProfile::setup(AppController &app)
         DisplayManager::Icon{
             asset::icon::CRITICAL_POWER.w,
             asset::icon::CRITICAL_POWER.h,
-            asset::icon::CRITICAL_POWER.rgb});
+            asset::icon::CRITICAL_POWER.rle_data});
 
     // =========================================================
     // 2️⃣ AUDIO
