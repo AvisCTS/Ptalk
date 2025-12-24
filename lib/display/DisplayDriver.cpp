@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "driver/ledc.h"
 #include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -119,9 +120,39 @@ void DisplayDriver::setAddressWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint
 
 void DisplayDriver::setBacklight(bool on)
 {
-    if (cfg_.pin_bl >= 0) {
+    if (cfg_.pin_bl < 0) return;
+
+    // If PWM is set up, drive duty; otherwise fall back to GPIO level
+    if (bl_pwm_ready_) {
+        const uint32_t duty_max = (1u << LEDC_TIMER_13_BIT) - 1;
+        uint32_t duty = on ? (bl_level_percent_ * duty_max) / 100 : 0;
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+    } else {
         gpio_set_direction((gpio_num_t)cfg_.pin_bl, GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)cfg_.pin_bl, on ? 1 : 0);
+    }
+}
+
+void DisplayDriver::setBacklightLevel(uint8_t percent)
+{
+    bl_level_percent_ = (percent > 100) ? 100 : percent;
+
+    if (cfg_.pin_bl < 0) return;
+
+    if (!bl_pwm_ready_) {
+        initBacklightPwm();
+    }
+
+    if (bl_pwm_ready_) {
+        const uint32_t duty_max = (1u << LEDC_TIMER_13_BIT) - 1;
+        uint32_t duty = (bl_level_percent_ * duty_max) / 100;
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+    } else {
+        // Fallback to simple on/off if PWM setup fails
+        gpio_set_direction((gpio_num_t)cfg_.pin_bl, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)cfg_.pin_bl, bl_level_percent_ > 0 ? 1 : 0);
     }
 }
 
@@ -175,6 +206,8 @@ bool DisplayDriver::init(const Config& cfg)
         // Ensure any deep sleep hold from previous run is disabled
         gpio_hold_dis((gpio_num_t)cfg.pin_bl);
         gpio_set_level((gpio_num_t)cfg.pin_bl, 1);
+        // Prepare PWM (lazy start if desired)
+        initBacklightPwm();
     }
 
     // 4. Send ST7789 init commands
@@ -404,4 +437,43 @@ void DisplayDriver::setRotation(uint8_t rotation)
     cfg_.y_offset = new_y_offset;
     
     ESP_LOGI(TAG, "Display rotation set to %u (0x%02X), offset=(%u,%u)", rotation, madctl, new_x_offset, new_y_offset);
+}
+
+void DisplayDriver::initBacklightPwm()
+{
+    if (cfg_.pin_bl < 0) {
+        bl_pwm_ready_ = false;
+        return;
+    }
+
+    // Configure a simple LEDC channel for backlight dimming
+    ledc_timer_config_t tcfg = {};
+    tcfg.speed_mode = LEDC_HIGH_SPEED_MODE;
+    tcfg.timer_num = LEDC_TIMER_0;
+    tcfg.duty_resolution = LEDC_TIMER_13_BIT;
+    tcfg.freq_hz = 5000; // 5 kHz
+    tcfg.clk_cfg = LEDC_AUTO_CLK;
+
+    if (ledc_timer_config(&tcfg) != ESP_OK) {
+        ESP_LOGW(TAG, "Backlight: timer config failed, fallback to GPIO");
+        bl_pwm_ready_ = false;
+        return;
+    }
+
+    ledc_channel_config_t ccfg = {};
+    ccfg.speed_mode = LEDC_HIGH_SPEED_MODE;
+    ccfg.channel = LEDC_CHANNEL_0;
+    ccfg.timer_sel = LEDC_TIMER_0;
+    ccfg.intr_type = LEDC_INTR_DISABLE;
+    ccfg.gpio_num = cfg_.pin_bl;
+    ccfg.duty = (1u << LEDC_TIMER_13_BIT) - 1; // start full
+    ccfg.hpoint = 0;
+
+    if (ledc_channel_config(&ccfg) != ESP_OK) {
+        ESP_LOGW(TAG, "Backlight: channel config failed, fallback to GPIO");
+        bl_pwm_ready_ = false;
+        return;
+    }
+
+    bl_pwm_ready_ = true;
 }

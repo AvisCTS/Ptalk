@@ -47,6 +47,8 @@ public:
     bool init(const Config& cfg);
     // Backlight control
     void setBacklight(bool on);
+    // Set backlight brightness (0-100%). Uses LEDC PWM if pin_bl is valid.
+    void setBacklightLevel(uint8_t percent);
     
     // Hold backlight pin state during deep sleep (requires RTC-capable GPIO)
     void holdBacklightDuringDeepSleep(bool enable);
@@ -85,6 +87,9 @@ private:
     void sendData(const uint8_t* data, size_t len);
     void setAddressWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 
+    // Backlight PWM init helper
+    void initBacklightPwm();
+
 private:
     Config cfg_;
     spi_device_handle_t spi_dev = nullptr;
@@ -93,6 +98,10 @@ private:
     uint16_t height_ = 240;
 
     uint8_t rotation_ = 0;
+
+    // Backlight PWM state
+    bool bl_pwm_ready_ = false;
+    uint8_t bl_level_percent_ = 100;
 
     bool initialized = false;
 };
