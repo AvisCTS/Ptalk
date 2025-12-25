@@ -36,8 +36,8 @@
 // #include "assets/icons/wifi_fail.hpp"
 // #include "assets/icons/battery.hpp"
 // #include "assets/icons/battery_low.hpp"
-// #include "assets/icons/battery_charge.hpp"
-// #include "assets/icons/battery_full.hpp"
+#include "assets/icons/battery_charge.hpp"
+#include "assets/icons/battery_full.hpp"
 #include "assets/icons/critical_power.hpp"
 //
 // #include "assets/emotions/idle.hpp"
@@ -57,7 +57,7 @@
 static const char *TAG = "DeviceProfile";
 
 // Helper function to register emotions (extracted to reduce code size in setup())
-static void registerEmotions(DisplayManager* display)
+static void registerEmotions(DisplayManager *display)
 {
     // Register happy emotion
     {
@@ -73,7 +73,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frames = asset::emotion::HAPPY.frames();
         display->registerEmotion("happy", anim1bit);
     }
-    
+
     // Register sad emotion
     {
         Animation1Bit anim1bit;
@@ -87,7 +87,7 @@ static void registerEmotions(DisplayManager* display)
         anim1bit.frames = asset::emotion::SAD.frames();
         display->registerEmotion("sad", anim1bit);
     }
-    
+
     // Register thinking emotion
     {
         Animation1Bit anim1bit;
@@ -154,8 +154,8 @@ namespace user_cfg
     struct UserSettings
     {
         std::string device_name = "PTalk";
-        uint8_t volume = 30;       // 0-100 %
-        uint8_t brightness = 100;   // 0-100 %
+        uint8_t volume = 30;      // 0-100 %
+        uint8_t brightness = 100; // 0-100 %
         std::string wifi_ssid;
         std::string wifi_pass;
     };
@@ -169,7 +169,8 @@ namespace user_cfg
         tmp.resize(required);
         if (nvs_get_str(h, key, tmp.data(), &required) != ESP_OK)
             return {};
-        if (!tmp.empty() && tmp.back() == '\0') tmp.pop_back();
+        if (!tmp.empty() && tmp.back() == '\0')
+            tmp.pop_back();
         return tmp;
     }
 
@@ -192,7 +193,8 @@ namespace user_cfg
         }
 
         cfg.device_name = get_string(h, "device_name");
-        if (cfg.device_name.empty()) cfg.device_name = "PTalk";
+        if (cfg.device_name.empty())
+            cfg.device_name = "PTalk";
 
         cfg.wifi_ssid = get_string(h, "wifi_ssid");
         cfg.wifi_pass = get_string(h, "wifi_pass");
@@ -264,8 +266,18 @@ bool DeviceProfile::setup(AppController &app)
     // display->registerIcon("wifi_fail",       asset::icon::WIFI_FAIL);
     // display->registerIcon("battery",         asset::icon::BATTERY);
     // display->registerIcon("battery_low",     asset::icon::BATTERY_LOW);
-    // display->registerIcon("battery_charge",  asset::icon::BATTERY_CHARGE);
-    // display->registerIcon("battery_full",    asset::icon::BATTERY_FULL);
+    display_mgr->registerIcon(
+        "battery_charge",
+        DisplayManager::Icon{
+            asset::icon::BATTERY_CHARGE.w,
+            asset::icon::BATTERY_CHARGE.h,
+            asset::icon::BATTERY_CHARGE.rle_data});
+    display_mgr->registerIcon(
+        "battery_full",
+        DisplayManager::Icon{
+            asset::icon::BATTERY_FULL.h,
+            asset::icon::BATTERY_FULL.w,
+            asset::icon::BATTERY_FULL.rle_data});
     display_mgr->registerIcon(
         "battery_critical",
         DisplayManager::Icon{
@@ -330,7 +342,7 @@ bool DeviceProfile::setup(AppController &app)
     // Đặt địa chỉ IP và port của WebSocket server (ví dụ: 192.168.1.100:8080)
     // Thêm path nếu server yêu cầu, ví dụ: ws://192.168.1.100:8080/ws
     // Uvicorn/FastAPI thường khai báo endpoint WebSocket tại "/ws".
-    net_cfg.ws_url = "ws://10.170.75.137:8080/ws";
+    net_cfg.ws_url = "ws://10.170.75.149:8080/ws";
 
     if (!network_mgr->init(net_cfg))
     {
@@ -352,7 +364,7 @@ bool DeviceProfile::setup(AppController &app)
     NetworkManager *network_ptr = network_mgr.get(); // For session flag access
 
     network_mgr->onServerBinary([spk_sb, network_ptr](const uint8_t *data, size_t len)
-                            {
+                                {
         if (!data || len == 0) return;
         // Feed encoded data to AudioManager's downlink buffer
         size_t written = xStreamBufferSend(spk_sb, data, len, pdMS_TO_TICKS(100));
@@ -373,7 +385,7 @@ bool DeviceProfile::setup(AppController &app)
 
     // Handle WS disconnect - must cleanup to unblock speaker task
     network_mgr->onDisconnect([spk_sb, audio_ptr]()
-                          {
+                              {
         auto& sm = StateManager::instance();
         auto current_state = sm.getInteractionState();
         
@@ -390,7 +402,7 @@ bool DeviceProfile::setup(AppController &app)
 
     // Optionally react to simple text control messages from server
     network_mgr->onServerText([network_ptr](const std::string &msg)
-                          {
+                              {
         auto& sm = StateManager::instance();
         if (msg == "PROCESSING_START" || msg == "PROCESSING") {
             sm.setInteractionState(state::InteractionState::PROCESSING,
@@ -441,7 +453,7 @@ bool DeviceProfile::setup(AppController &app)
     }
 
     touch_input->onEvent([&app](TouchInput::Event e)
-                   {
+                         {
         if (e == TouchInput::Event::PRESS) {
             app.postEvent(event::AppEvent::USER_BUTTON);
         }

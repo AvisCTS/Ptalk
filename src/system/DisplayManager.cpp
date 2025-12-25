@@ -277,7 +277,7 @@ void DisplayManager::update(uint32_t dt_ms)
         if (battery_percent != prev_battery_percent)
         {
             // Clear old text area (assume max width of "100%" = 4 chars * 8 pixels = 32px)
-            int text_x = width_ - 40;                // 40px from right edge
+            int text_x = width_ - 160;               // 40px from right edge
             drv->fillRect(text_x, 5, 40, 8, 0x0000); // Clear 40x8 black rectangle
 
             char buf[8];
@@ -353,12 +353,12 @@ void DisplayManager::handleConnectivity(state::ConnectivityState s)
 
     case state::ConnectivityState::CONNECTING_WIFI:
         // Show text "Connecting WiFi..."
-        playText("Connecting WiFi...", -1, -1, 0xFFFF, 1.5); // centered, white text
+        playText("Connecting WiFi...", -1, -1, 0xFFFF, 1.8); // centered, white text
         break;
 
     case state::ConnectivityState::WIFI_PORTAL:
         // Show text "WiFi Portal Mode"
-        playText("WiFi Portal Mode", -1, -1, 0xFFFF, 1.5); // centered, white text
+        playText("WiFi Portal Mode", -1, -1, 0xFFFF, 1.8); // centered, white text
         // playEmotion("sad");
         break;
 
@@ -417,11 +417,11 @@ void DisplayManager::handlePower(state::PowerState s)
         break;
 
     case state::PowerState::CHARGING:
-        playIcon("battery_charge");
+        playIcon("battery_charge", IconPlacement::Custom, width_ - 185, 0);
         break;
 
     case state::PowerState::FULL_BATTERY:
-        playIcon("battery_full");
+        playIcon("battery_full", IconPlacement::Custom, width_ - 185, 0);
         break;
 
     case state::PowerState::POWER_SAVING:
@@ -558,7 +558,9 @@ void DisplayManager::playIcon(const std::string &name,
         break;
     }
     if (drv)
+    {
         drv->drawRLE2bitIcon(draw_x, draw_y, ico.w, ico.h, ico.rle_data);
+    }
 }
 
 // ============================================================================
