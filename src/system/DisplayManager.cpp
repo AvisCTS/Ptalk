@@ -326,7 +326,7 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
         playEmotion("thinking");
         break;
     case state::InteractionState::SPEAKING:
-        playEmotion("speaking");
+        //playEmotion("speaking");
         break;
     case state::InteractionState::CANCELLING:
         break;

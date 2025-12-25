@@ -75,7 +75,7 @@ async def ws_endpoint(ws: WebSocket):
             # ====================================================
             await ws.send_text("PROCESSING_START")
             await ws.send_text(random.choice(EMOTIONS))
-            await ws.send_text("LISTENING")
+            #await ws.send_text("LISTENING")
 
             # ====================================================
             # 3️⃣ STREAM WAV -> ESP32 (FRAME-BASED, PCM passthrough)

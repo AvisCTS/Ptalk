@@ -209,7 +209,7 @@ void StateManager::setEmotionState(state::EmotionState s) {
     
     {
         std::lock_guard<std::mutex> lk(mtx);
-        if (s == emotion_state) return;
+        //if (s == emotion_state) return;
 
         emotion_state = s;
         ESP_LOGI(TAG, "EmotionState: %d (change)", static_cast<int>(s));
