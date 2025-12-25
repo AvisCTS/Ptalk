@@ -630,11 +630,11 @@ void AppController::onPowerStateChanged(state::PowerState s) {
             }
             break;
 
-        case state::PowerState::POWER_SAVING:
-            if (audio) {
-                // TODO: audio->setPowerSaving(true);
-            }
-            break;
+        // case state::PowerState::POWER_SAVING:
+        //     if (audio) {
+        //         // TODO: audio->setPowerSaving(true);
+        //     }
+        //     break;
 
         case state::PowerState::CRITICAL:
             if (audio) {
