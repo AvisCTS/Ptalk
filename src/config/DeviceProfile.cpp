@@ -355,7 +355,7 @@ bool DeviceProfile::setup(AppController &app)
         return false;
     }
 
-    audio_mgr->start();
+    //audio_mgr->start();
 
     // =========================================================
     // 3️⃣ NETWORK
@@ -470,7 +470,7 @@ bool DeviceProfile::setup(AppController &app)
     auto touch_input = std::make_unique<TouchInput>();
 
     TouchInput::Config touch_cfg{
-        .pin = GPIO_NUM_0,
+        .pin = GPIO_NUM_NC, 
         .active_low = true,
         .long_press_ms = 1200};
 
@@ -484,6 +484,10 @@ bool DeviceProfile::setup(AppController &app)
                          {
         if (e == TouchInput::Event::PRESS) {
             app.postEvent(event::AppEvent::USER_BUTTON);
+        }
+        if (e == TouchInput::Event::RELEASE) {
+            // Currently no action on release
+            app.postEvent(event::AppEvent::CANCEL_REQUEST);
         }
         if (e == TouchInput::Event::LONG_PRESS) {
             app.postEvent(event::AppEvent::SLEEP_REQUEST);
