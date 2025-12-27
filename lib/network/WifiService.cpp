@@ -156,7 +156,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 }
 
 static esp_err_t connect_post_handler(httpd_req_t *req)
-{   
+{
     ESP_LOGI(TAG, "HTTP POST %s", req->uri);
     HandlerContext *ctx = (HandlerContext *)req->user_ctx;
     if (!ctx)
@@ -224,13 +224,12 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
 /**
  * Debug handler for any unhandled POST requests
  */
-static esp_err_t any_post_handler(httpd_req_t* req)
+static esp_err_t any_post_handler(httpd_req_t *req)
 {
     ESP_LOGW(TAG, "UNHANDLED POST %s", req->uri);
     httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No handler");
     return ESP_OK;
 }
-
 
 static esp_err_t logo1_get_handler(httpd_req_t *req)
 {
@@ -287,11 +286,12 @@ void WifiService::init()
 bool WifiService::autoConnect()
 {
     loadCredentials();
-    if (sta_ssid.empty()) {
+    if (sta_ssid.empty())
+    {
         ESP_LOGW(TAG, "autoConnect: No saved credentials found");
         return false;
     }
-    ESP_LOGI(TAG, "autoConnect: Attempting to connect with saved credentials (SSID: %s, Pass: %s)", 
+    ESP_LOGI(TAG, "autoConnect: Attempting to connect with saved credentials (SSID: %s, Pass: %s)",
              sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
     startSTA();
     return true;
@@ -327,6 +327,8 @@ void WifiService::startCaptivePortal(const std::string &ap_ssid, const uint8_t a
     httpd_config_t http_cfg = HTTPD_DEFAULT_CONFIG();
     http_cfg.server_port = 80;
 
+    http_cfg.stack_size = 8192;
+
     if (httpd_start(&http_server, &http_cfg) == ESP_OK)
     {
 
@@ -352,7 +354,6 @@ void WifiService::startCaptivePortal(const std::string &ap_ssid, const uint8_t a
         any_post.method = HTTP_POST;
         any_post.handler = any_post_handler;
         httpd_register_uri_handler(http_server, &any_post);
-
 
         // GET /logo1.jpg
         httpd_uri_t logo1_get = {};
@@ -427,20 +428,22 @@ void WifiService::connectWithCredentials(const char *ssid, const char *pass)
 {
     if (!ssid)
         return;
-    
+
     ESP_LOGI(TAG, "connectWithCredentials: Received new credentials (SSID: %s, Pass: %s)",
              ssid, pass && strlen(pass) > 0 ? "<set>" : "<empty>");
-    
-    // Stop portal if it's running to allow STA mode
-    if (portal_running) {
-        ESP_LOGI(TAG, "Portal running - stopping before STA connect");
-        stopCaptivePortal();
-    }
-    
+
     sta_ssid = ssid;
     sta_pass = pass ? pass : std::string();
     saveCredentials(ssid, pass ? pass : "");
     ESP_LOGI(TAG, "Credentials saved. Initiating STA connection...");
+    
+    // Stop portal if it's running to allow STA mode
+    if (portal_running)
+    {
+        ESP_LOGI(TAG, "Portal running - stopping before STA connect");
+        stopCaptivePortal();
+    }
+
     startSTA();
 }
 
@@ -504,18 +507,19 @@ void WifiService::ensureStaStarted()
     wifi_mode_t mode;
     esp_wifi_get_mode(&mode);
 
-    if (mode != WIFI_MODE_STA && mode != WIFI_MODE_APSTA) {
+    if (mode != WIFI_MODE_STA && mode != WIFI_MODE_APSTA)
+    {
         ESP_LOGI(TAG, "Switching WiFi to STA for scan");
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     }
 
-    if (!wifi_started) {
+    if (!wifi_started)
+    {
         ESP_LOGI(TAG, "Starting WiFi for scan");
         ESP_ERROR_CHECK(esp_wifi_start());
         wifi_started = true;
     }
 }
-
 
 // --------------------------------------------------------------------------------
 // Internal helpers
@@ -531,6 +535,8 @@ void WifiService::loadCredentials()
     {
         sta_pass = p;
     }
+    ESP_LOGI(TAG, "loadCredentials: Loaded SSID: %s, Pass: %s",
+             sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
 }
 
 void WifiService::saveCredentials(const char *ssid, const char *pass)
@@ -558,7 +564,7 @@ void WifiService::startSTA()
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     wifi_started = true;
-    ESP_LOGI(TAG, "WiFi STA started. Connecting to SSID: %s (password: %s)", 
+    ESP_LOGI(TAG, "WiFi STA started. Connecting to SSID: %s (password: %s)",
              sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
     esp_wifi_connect();
 
