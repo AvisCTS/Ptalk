@@ -151,8 +151,8 @@ namespace device_cfg
     struct PowerPins
     {
         adc1_channel_t adc_channel = ADC1_CHANNEL_5; // Battery sense ADC channel (default GPIO33)
-        gpio_num_t pin_chg = GPIO_NUM_NC;            // Optional charge detect pin (active level depends on HW)
-        gpio_num_t pin_full = GPIO_NUM_NC;           // Optional full-battery pin (active level depends on HW)
+        gpio_num_t pin_chg = GPIO_NUM_34;            // Optional charge detect pin (active level depends on HW)
+        gpio_num_t pin_full = GPIO_NUM_35;           // Optional full-battery pin (active level depends on HW)
         float r1_ohm = 10000.0f;                     // Resistor divider R1 (top, to battery)
         float r2_ohm = 20000.0f;                     // Resistor divider R2 (bottom, to GND)
     };
@@ -213,10 +213,10 @@ namespace user_cfg
     {
         UserSettings cfg;
         nvs_handle_t h;
-        esp_err_t err = nvs_open("usercfg", NVS_READONLY, &h);
+        esp_err_t err = nvs_open("storage", NVS_READONLY, &h);
         if (err != ESP_OK)
         {
-            ESP_LOGI(TAG, "usercfg not found, using defaults");
+            ESP_LOGI(TAG, "storage not found, using defaults");
             return cfg;
         }
 
@@ -224,8 +224,9 @@ namespace user_cfg
         if (cfg.device_name.empty())
             cfg.device_name = "PTalk";
 
-        cfg.wifi_ssid = get_string(h, "wifi_ssid");
-        cfg.wifi_pass = get_string(h, "wifi_pass");
+        // Đọc WiFi credentials với key giống bên ghi
+        cfg.wifi_ssid = get_string(h, "ssid");
+        cfg.wifi_pass = get_string(h, "pass");
 
         cfg.volume = get_u8(h, "volume", cfg.volume);
         cfg.brightness = get_u8(h, "brightness", cfg.brightness);
@@ -470,7 +471,7 @@ bool DeviceProfile::setup(AppController &app)
     auto touch_input = std::make_unique<TouchInput>();
 
     TouchInput::Config touch_cfg{
-        .pin = GPIO_NUM_NC, 
+        .pin = GPIO_NUM_16, 
         .active_low = true,
         .long_press_ms = 1200};
 
