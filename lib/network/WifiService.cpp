@@ -28,7 +28,14 @@ static int rssiToPercent(int rssi)
         return 100;
     return 2 * (rssi + 100);
 }
-
+// --------------------------------------------------------------------------------
+// Struct to hold WiFi connection parameters for async connect
+struct WifiConnParams
+{
+    WifiService *svc;
+    std::string ssid;
+    std::string pass;
+};
 // --------------------------------------------------------------------------------
 // HTTP helpers & templates
 // We'll use PAGE_HTML from web_page.hpp and replace placeholders
@@ -162,7 +169,7 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
     if (!ctx)
         return ESP_FAIL;
 
-    // Read POST data
+    // 1. Read POST data
     int len = req->content_len;
     std::string body;
     body.resize(len);
@@ -173,17 +180,16 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    // Parse urlencoded body: ssid=...&pass=...
+    // 2. Parse field helper (giữ nguyên logic của bạn)
     auto get_field = [&](const std::string &key) -> std::string
     {
         std::string needle = key + "=";
         size_t i = body.find(needle);
         if (i == std::string::npos)
-            return std::string();
+            return "";
         i += needle.size();
         size_t j = body.find('&', i);
         std::string val = body.substr(i, (j == std::string::npos) ? std::string::npos : (j - i));
-        // simple URL decode for + and %20
         std::string dec;
         for (size_t k = 0; k < val.size(); ++k)
         {
@@ -192,8 +198,7 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
             else if (val[k] == '%' && k + 2 < val.size())
             {
                 char hex[3] = {val[k + 1], val[k + 2], 0};
-                char c = (char)strtol(hex, nullptr, 16);
-                dec.push_back(c);
+                dec.push_back((char)strtol(hex, nullptr, 16));
                 k += 2;
             }
             else
@@ -211,13 +216,27 @@ static esp_err_t connect_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    // Attempt connect (connectWithCredentials will persist)
-    ctx->svc->connectWithCredentials(ssid.c_str(), pass.c_str());
-
-    // Redirect back to root
+    // 3. GỬI PHẢN HỒI TRƯỚC (Quan trọng nhất để tránh Deadlock)
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", "/");
     httpd_resp_send(req, nullptr, 0);
+
+    // 4. Tạo một Task riêng để xử lý kết nối (Deferred Execution)
+    WifiConnParams *params = new WifiConnParams{ctx->svc, ssid, pass};
+
+    xTaskCreate([](void *arg)
+                {
+                    WifiConnParams *p = (WifiConnParams *)arg;
+                    vTaskDelay(pdMS_TO_TICKS(500)); // Đợi 0.5s để server gửi xong gói tin HTTP cuối cùng
+
+                    ESP_LOGI("WifiTask", "Executing connection switch...");
+                    p->svc->connectWithCredentials(p->ssid.c_str(), p->pass.c_str());
+
+                    delete p;          // Giải phóng bộ nhớ struct
+                    vTaskDelete(NULL); // Tự xóa task
+                },
+                "wifi_conn_task", 4096, params, 5, NULL);
+
     return ESP_OK;
 }
 
@@ -258,20 +277,18 @@ static esp_err_t logo2_get_handler(httpd_req_t *req)
 
 void WifiService::init()
 {
-    esp_err_t e;
-    e = nvs_flash_init();
+    esp_err_t e = nvs_flash_init();
     if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
         ESP_ERROR_CHECK(nvs_flash_erase());
         e = nvs_flash_init();
     }
-
     ESP_ERROR_CHECK(e);
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    esp_netif_init();
+    // Xóa dòng esp_netif_init() dư thừa ở đây
     sta_netif = esp_netif_create_default_wifi_sta();
     ap_netif = esp_netif_create_default_wifi_ap();
 
@@ -279,7 +296,6 @@ void WifiService::init()
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     registerEvents();
-
     ESP_LOGI(TAG, "WifiService initialized");
 }
 
@@ -379,6 +395,7 @@ void WifiService::stopCaptivePortal()
     if (!portal_running)
         return;
 
+    ESP_LOGI(TAG, "Manual stop captive portal");
     if (http_server)
     {
         httpd_stop(http_server);
@@ -387,12 +404,16 @@ void WifiService::stopCaptivePortal()
 
     portal_running = false;
     ap_only_mode = false;
-    cached_networks.clear(); // Clear cached networks
-    ESP_LOGI(TAG, "Captive portal stopped");
-    // try to start STA with saved creds
+    cached_networks.clear();
+
+    // Thử kết nối lại STA nếu có credentials cũ
     loadCredentials();
     if (!sta_ssid.empty())
+    {
+        esp_wifi_stop(); // Stop trước khi startSTA để reset mode
+        vTaskDelay(pdMS_TO_TICKS(50));
         startSTA();
+    }
 }
 
 void WifiService::disconnect()
@@ -429,19 +450,30 @@ void WifiService::connectWithCredentials(const char *ssid, const char *pass)
     if (!ssid)
         return;
 
-    ESP_LOGI(TAG, "connectWithCredentials: Received new credentials (SSID: %s, Pass: %s)",
-             ssid, pass && strlen(pass) > 0 ? "<set>" : "<empty>");
+    ESP_LOGI(TAG, "connectWithCredentials: %s", ssid);
 
+    // Lưu credentials trước
     sta_ssid = ssid;
-    sta_pass = pass ? pass : std::string();
-    saveCredentials(ssid, pass ? pass : "");
-    ESP_LOGI(TAG, "Credentials saved. Initiating STA connection...");
-    
-    // Stop portal if it's running to allow STA mode
+    sta_pass = pass ? pass : "";
+    saveCredentials(sta_ssid.c_str(), sta_pass.c_str());
+
+    // Nếu portal đang chạy, dừng nó trước khi chuyển sang mode STA
     if (portal_running)
     {
-        ESP_LOGI(TAG, "Portal running - stopping before STA connect");
-        stopCaptivePortal();
+        ESP_LOGI(TAG, "Stopping portal before STA connection");
+
+        // Dừng HTTP server
+        if (http_server)
+        {
+            httpd_stop(http_server);
+            http_server = nullptr;
+        }
+        portal_running = false;
+        ap_only_mode = false;
+
+        // Reset WiFi driver để đảm bảo sạch sẽ (Clean state)
+        esp_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     startSTA();
