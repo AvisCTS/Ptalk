@@ -56,21 +56,18 @@ bool AudioManager::init()
     // Stream buffers (FreeRTOS - thread-safe, no race conditions)
     // -------------------------------
     sb_mic_pcm = xStreamBufferCreate(
-        4 * 1024,   // Buffer size
-        1           // Trigger level (1 byte to unblock reader)
+        4 * 1024, // Buffer size
+        1         // Trigger level (1 byte to unblock reader)
     );
     sb_mic_encoded = xStreamBufferCreate(
         2 * 1024,
-        1
-    );
+        1);
     sb_spk_pcm = xStreamBufferCreate(
         4 * 1024,
-        1
-    );
+        1);
     sb_spk_encoded = xStreamBufferCreate(
-        32 * 1024,  // Increased for better jitter tolerance
-        1
-    );
+        32 * 1024, // Increased for better jitter tolerance
+        1);
 
     if (!sb_mic_pcm || !sb_mic_encoded || !sb_spk_pcm || !sb_spk_encoded)
     {
@@ -307,7 +304,8 @@ void AudioManager::micTaskLoop()
 {
     ESP_LOGI(TAG, "MIC task started");
 
-    int16_t pcm_buf[256];
+    constexpr size_t PCM_FRAME = 256;
+    int16_t pcm_buf[PCM_FRAME];
 
     while (started)
     {
@@ -317,27 +315,17 @@ void AudioManager::micTaskLoop()
             continue;
         }
 
-        size_t samples = input->readPcm(pcm_buf, 256);
+        size_t samples = input->readPcm(pcm_buf, PCM_FRAME);
         if (samples == 0)
-        {
-            vTaskDelay(pdMS_TO_TICKS(10)); // Yield when no data
             continue;
-        }
 
-        uint8_t encoded[256];
-        size_t enc_len = codec->encode(
-            pcm_buf,
-            samples,
-            encoded,
-            sizeof(encoded));
+        size_t bytes = samples * sizeof(int16_t);
 
-        if (enc_len > 0)
-        {
-            xStreamBufferSend(sb_mic_encoded, encoded, enc_len, pdMS_TO_TICKS(10));
-        }
-
-        // No manual delay - let scheduler decide when to context switch
-        // readPcm() and encode() already provide natural blocking points
+        xStreamBufferSend(
+            sb_mic_pcm,
+            reinterpret_cast<uint8_t *>(pcm_buf),
+            bytes,
+            pdMS_TO_TICKS(10));
     }
 
     ESP_LOGW(TAG, "MIC task stopped");
@@ -352,67 +340,90 @@ void AudioManager::codecTaskLoop()
 {
     ESP_LOGI(TAG, "Codec task started");
 
-    uint8_t adpcm_chunk[512];
-    bool first_frame = true;
+    constexpr size_t PCM_FRAME = 256;   // 16 ms @16kHz
+    constexpr size_t ADPCM_FRAME = 512; // server yêu cầu
+
+    int16_t pcm_in[PCM_FRAME];
+    uint8_t encoded[ADPCM_FRAME];
+
+    int16_t pcm_out[1024]; // 64 ms PCM output
+    bool new_decode_session = true;
 
     while (started)
     {
+        // =====================
+        // ENCODE (MIC → SERVER)
+        // =====================
+        size_t pcm_bytes = xStreamBufferReceive(
+            sb_mic_pcm,
+            reinterpret_cast<uint8_t *>(pcm_in),
+            sizeof(pcm_in),
+            pdMS_TO_TICKS(10)
 
-        // Idle when not speaking
+        );
+
+        if (pcm_bytes == sizeof(pcm_in))
+        {
+            size_t samples = pcm_bytes / sizeof(int16_t);
+
+            size_t enc_len = codec->encode(
+                pcm_in,
+                samples,
+                encoded,
+                sizeof(encoded));
+
+            if (enc_len > 0)
+            {
+                xStreamBufferSend(
+                    sb_mic_encoded,
+                    encoded,
+                    enc_len,
+                    pdMS_TO_TICKS(10));
+            }
+        }
+
+        // =====================
+        // DECODE (SERVER → SPK)
+        // =====================
         if (!speaking || power_saving)
         {
-            // Cleanup for next session
             xStreamBufferReset(sb_spk_encoded);
             xStreamBufferReset(sb_spk_pcm);
             codec->reset();
-            first_frame = true;
+            new_decode_session = true;
 
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
-        // BLOCK read ADPCM with timeout
         size_t got = xStreamBufferReceive(
             sb_spk_encoded,
-            adpcm_chunk,
-            sizeof(adpcm_chunk),
-            pdMS_TO_TICKS(50) // 50ms timeout
-        );
+            encoded,
+            sizeof(encoded),
+            pdMS_TO_TICKS(20));
 
-        // Timeout or underrun - yield and check speaking flag
-        if (got != sizeof(adpcm_chunk))
+        if (got == sizeof(encoded))
         {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
+            if (new_decode_session)
+            {
+                codec->reset();
+                new_decode_session = false;
+            }
 
-        // Reset predictor on first frame of new session ONLY
-        if (first_frame)
-        {
-            codec->reset();
-            first_frame = false;
-            ESP_LOGI(TAG, "ADPCM decode session started");
-        }
+            size_t out_samples = codec->decode(
+                encoded,
+                got,
+                pcm_out,
+                1024);
 
-        // Decode ADPCM → PCM (1024 samples @ 16kHz = 64ms audio)
-        size_t samples = codec->decode(
-            adpcm_chunk,
-            sizeof(adpcm_chunk),
-            spk_pcm_buffer,
-            4096 // Buffer for 1024 samples * 2 bytes
-        );
-
-        // Write PCM to speaker buffer
-        // This may block if buffer is full, which provides backpressure
-        if (samples > 0)
-        {
-            size_t pcm_bytes = samples * sizeof(int16_t);
-            xStreamBufferSend(
-                sb_spk_pcm,
-                reinterpret_cast<uint8_t *>(spk_pcm_buffer),
-                pcm_bytes,
-                portMAX_DELAY // Block until space available
-            );
+            if (out_samples > 0)
+            {
+                xStreamBufferSend(
+                    sb_spk_pcm,
+                    reinterpret_cast<uint8_t *>(pcm_out),
+                    out_samples * sizeof(int16_t),
+                    portMAX_DELAY);
+            }
         }
     }
 
@@ -427,16 +438,15 @@ void AudioManager::codecTaskLoop()
 // ============================================================================
 void AudioManager::spkTaskLoop()
 {
-    const size_t PCM_CHUNK_SAMPLES = 1024; // 64ms @ 16kHz
-    const size_t PCM_CHUNK_BYTES = PCM_CHUNK_SAMPLES * sizeof(int16_t);
-    int16_t pcm_chunk[PCM_CHUNK_SAMPLES];
+    constexpr size_t PCM_CHUNK_SAMPLES = 1024;
+    constexpr size_t PCM_CHUNK_BYTES =
+        PCM_CHUNK_SAMPLES * sizeof(int16_t);
 
+    int16_t pcm_chunk[PCM_CHUNK_SAMPLES];
     bool i2s_started = false;
 
     while (started)
     {
-
-        // Stop I2S when not speaking
         if (!speaking || power_saving)
         {
             if (i2s_started)
@@ -444,53 +454,34 @@ void AudioManager::spkTaskLoop()
                 output->stopPlayback();
                 i2s_started = false;
             }
-
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
-        // Start I2S on first frame
         if (!i2s_started)
         {
-            if (output->startPlayback())
-            {
-                i2s_started = true;
-                ESP_LOGI(TAG, "I2S playback started");
-            }
-            else
+            if (!output->startPlayback())
             {
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
+            i2s_started = true;
         }
 
-        // BLOCK read PCM with timeout
         size_t got = xStreamBufferReceive(
             sb_spk_pcm,
             reinterpret_cast<uint8_t *>(pcm_chunk),
             PCM_CHUNK_BYTES,
-            pdMS_TO_TICKS(100) // 100ms timeout - allows checking speaking flag
-        );
+            pdMS_TO_TICKS(100));
 
-        // Timeout or underrun - yield and loop back
-        if (got != PCM_CHUNK_BYTES)
+        if (got == PCM_CHUNK_BYTES)
         {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
+            output->writePcm(pcm_chunk, PCM_CHUNK_SAMPLES);
         }
-
-        // Write to I2S output
-        // This BLOCKS naturally according to I2S DMA clock (16kHz = 64ms per frame)
-        // NO manual delays - i2s_write() is the only timing source
-        output->writePcm(pcm_chunk, PCM_CHUNK_SAMPLES);
     }
 
-    // Clean shutdown
     if (i2s_started)
-    {
         output->stopPlayback();
-        i2s_started = false;
-    }
 
     ESP_LOGW(TAG, "Speaker task ended");
     vTaskDelete(nullptr);
