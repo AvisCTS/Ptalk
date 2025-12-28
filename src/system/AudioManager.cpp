@@ -60,13 +60,13 @@ bool AudioManager::init()
         1         // Trigger level (1 byte to unblock reader)
     );
     sb_mic_encoded = xStreamBufferCreate(
-        2 * 1024,
+        32 * 1024,
         1);
     sb_spk_pcm = xStreamBufferCreate(
         4 * 1024,
         1);
     sb_spk_encoded = xStreamBufferCreate(
-        32 * 1024, // Increased for better jitter tolerance
+        16 * 1024, // Increased for better jitter tolerance
         1);
 
     if (!sb_mic_pcm || !sb_mic_encoded || !sb_spk_pcm || !sb_spk_encoded)
@@ -214,14 +214,29 @@ void AudioManager::handleInteractionState(state::InteractionState s,
 // ============================================================================
 void AudioManager::startListening(state::InputSource src)
 {
-    if (listening)
-        return;
+    if (listening) return;
 
-    ESP_LOGI(TAG, "Start listening");
+    ESP_LOGI(TAG, "Start listening (Interruption handled)");
+    
+    // 1. Dừng ngay việc phát loa nếu đang nói
+    if (speaking) {
+        stopSpeaking(); // Hàm này sẽ gọi output->stopPlayback()
+    }
+
+    // 2. XÓA SẠCH các buffer âm thanh cũ của loa
+    xStreamBufferReset(sb_spk_encoded); // Xóa dữ liệu nén chưa kịp giải mã
+    xStreamBufferReset(sb_spk_pcm);     // Xóa dữ liệu PCM chưa kịp phát ra loa
+    
+    // 3. Reset Codec để xóa bộ nhớ đệm của ADPCM (tránh tiếng nổ/rè cho câu sau)
+    if (codec) {
+        codec->reset();
+    }
+
     current_source = src;
     listening = true;
     speaking = false;
 
+    // 4. Bắt đầu thu âm
     input->startCapture();
 }
 

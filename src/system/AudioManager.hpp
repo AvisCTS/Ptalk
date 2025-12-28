@@ -23,7 +23,8 @@ class AudioCodec;
  * - KHÔNG làm network
  * - Cung cấp ring buffer cho module khác (NetworkManager)
  */
-class AudioManager {
+class AudioManager
+{
 public:
     AudioManager();
     ~AudioManager();
@@ -76,9 +77,9 @@ private:
     // ------------------------------------------------------------------------
     // Tasks
     // ------------------------------------------------------------------------
-    static void micTaskEntry(void* arg);
-    static void codecTaskEntry(void* arg);
-    static void spkTaskEntry(void* arg);
+    static void micTaskEntry(void *arg);
+    static void codecTaskEntry(void *arg);
+    static void spkTaskEntry(void *arg);
 
     void micTaskLoop();
     void codecTaskLoop();
@@ -99,18 +100,18 @@ private:
     // ------------------------------------------------------------------------
     // Components
     // ------------------------------------------------------------------------
-    std::unique_ptr<AudioInput>  input;
+    std::unique_ptr<AudioInput> input;
     std::unique_ptr<AudioOutput> output;
-    std::unique_ptr<AudioCodec>  codec;
+    std::unique_ptr<AudioCodec> codec;
 
     // ------------------------------------------------------------------------
     // Stream buffers (FreeRTOS - thread-safe, no race conditions)
     // ------------------------------------------------------------------------
-    StreamBufferHandle_t sb_mic_pcm;      // PCM from mic
-    StreamBufferHandle_t sb_mic_encoded;  // encoded uplink
-    StreamBufferHandle_t sb_spk_pcm;      // PCM to speaker
-    StreamBufferHandle_t sb_spk_encoded;  // encoded downlink
-    
+    StreamBufferHandle_t sb_mic_pcm;     // PCM from mic
+    StreamBufferHandle_t sb_mic_encoded; // encoded uplink
+    StreamBufferHandle_t sb_spk_pcm;     // PCM to speaker
+    StreamBufferHandle_t sb_spk_encoded; // encoded downlink
+
     // PCM decode buffer (static allocation to avoid heap alloc in task)
     int16_t spk_pcm_buffer[4096] = {};
 
