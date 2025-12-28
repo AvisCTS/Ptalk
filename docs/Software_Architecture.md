@@ -44,7 +44,7 @@ Mục tiêu chính:
 ┌─────────────────┐   ┌───────────────────┐
 │ PowerManager     │   │ NetworkManager    │
 │ (logic)          │   │ AudioManager      │
-│ DisplayAnimator  │   │ TouchInput        │
+│ DisplayManager   │   │ TouchInput        │
 └──────▲───────────┘   └──────────▲────────┘
        │ Data                     │ Data/Input
 ┌──────┴───────────┐        ┌─────┴───────────┐
@@ -126,6 +126,8 @@ Chức năng:
   * Khi wakeword → chuyển sang LISTENING
   * Khi PROCESSING → hiển thị animation “thinking”
   * Khi WS Connected → update UI
+
+*Note: AppController tạo `AppControllerTask` **trước** khi các module khác khởi chạy (see `DeviceProfile::setup()`), đảm bảo queue có sẵn để nhận các thông báo trạng thái.
 * Mapping AppEvents → state transition
 * Dispatch hành động sang:
 
@@ -137,12 +139,12 @@ Chạy trong **AppControllerTask** (không block module khác).
 
 ---
 
-### 3.5 DisplayAnimator
+### 3.5 DisplayManager
 
-* Render animation
-* Hiển thị trạng thái thiết bị
-* Có task riêng hoặc dùng timer
-* Không tự quyết định state → chỉ đọc state hoặc API UI
+* Render animation (AnimationPlayer, direct rendering — no framebuffer)
+* Hiển thị trạng thái thiết bị, OTA progress, and emotion animations
+* Chạy trong task riêng (UI loop) và sử dụng non-blocking updates
+* Không tự quyết định state → chỉ đọc state hoặc phản hồi subscription từ StateManager
 
 ---
 
@@ -172,6 +174,22 @@ Chạy trong **AppControllerTask** (không block module khác).
 Mỗi input gửi **AppEvent** → AppController.
 
 ---
+
+### 3.9 Emotion System
+
+* **Source:** Emotion codes are sent by server over WebSocket (simple 2-char codes like "01", "10", "99") during SPEAKING phase.
+* **Parsing:** `NetworkManager::parseEmotionCode()` maps codes to `state::EmotionState` and calls `StateManager::setEmotionState()`.
+* **Display:** `DisplayManager` subscribes to `EmotionState` and will play registered animations (registered in `DeviceProfile`).
+* **Current mapping (in code):**
+  - "00" → NEUTRAL
+  - "01" → HAPPY
+  - "02" → ANGRY
+  - "03" → EXCITED
+  - "10" → SAD
+  - "12" → CONFUSED
+  - "13" → CALM
+  - "99" → THINKING
+* **Assets:** DeviceProfile currently registers: `neutral`, `idle`, `listening`, `happy`, `sad`, `thinking`, `stun`. Missing: `angry`, `excited`, `calm` (recommended to add).
 
 # 4. Event Pipeline
 
@@ -251,7 +269,7 @@ BOOTING → RUNNING → ERROR → MAINTENANCE → UPDATING_FIRMWARE
 ### PowerState
 
 ```
-NORMAL → LOW_BATTERY → CRITICAL → CHARGING → FULL_BATTERY → ERROR
+NORMAL → CHARGING → FULL_BATTERY → CRITICAL → ERROR
 ```
 
 ---

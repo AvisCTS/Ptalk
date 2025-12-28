@@ -27,7 +27,7 @@ static state::EmotionState parseEmotionCode(const std::string& code);
 state::EmotionState NetworkManager::parseEmotionCode(const std::string& code)
 {
     // Maps emotion codes to EmotionState
-    // "01" → HAPPY, "11" → SAD, etc.
+    // "01" → HAPPY, "10" → SAD, etc.
 }
 
 // Updated handleWsTextMessage():
@@ -106,19 +106,19 @@ DisplayManager (subscribed) → Update UI/animations
 
 ## Testing Checklist
 
-- [ ] Compile successfully (no errors/warnings)
-- [ ] NetworkManager receives emotion codes from server
-- [ ] StateManager updates with correct emotion state
-- [ ] DisplayManager responds to emotion state changes
-- [ ] on_text_cb still gets called (backward compatibility)
-- [ ] Emotion codes outside 2-char format handled gracefully
+- [x] Compile successfully (no errors/warnings)
+- [x] `NetworkManager` receives and parses 2-char emotion codes
+- [x] `StateManager.setEmotionState()` is called on parse
+- [x] `DisplayManager` responds to emotion state changes (registered handlers)
+- [x] `on_text_cb` still gets called (backward compatibility)
+- [ ] Extended JSON messages (optional) to be handled gracefully
 
 ## Next Steps
 
-1. **Implement DisplayManager::handleEmotion()** - Load/play appropriate animations
-2. **Create emotion animation assets** - Register animations for each emotion
-3. **Test with server** - Send test emotion codes during SPEAKING phase
-4. **Add JSON parsing** (optional) - Support extended message format
+1. **Create missing emotion animation assets** (angry, excited, calm) and register in `DeviceProfile`
+2. **Add unit/integration tests** to validate parse + state propagation + UI updates
+3. **Test with server** - Send test emotion codes during SPEAKING phase and verify animations
+4. **Optional: JSON parsing** to support extended message payloads
 
 ## Notes
 

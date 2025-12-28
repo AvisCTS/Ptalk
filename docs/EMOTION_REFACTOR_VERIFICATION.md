@@ -76,7 +76,7 @@ if (msg.length() == 2) {
 "01"          → EmotionState::HAPPY      (Cheerful)
 "02"          → EmotionState::ANGRY      (Urgent)
 "03"          → EmotionState::EXCITED    (Enthusiastic)
-"11"          → EmotionState::SAD        (Empathetic)
+"10"          → EmotionState::SAD        (Empathetic)
 "12"          → EmotionState::CONFUSED   (Uncertain)
 "13"          → EmotionState::CALM       (Soothing)
 "99"          → EmotionState::THINKING   (Processing)
@@ -133,24 +133,12 @@ if (msg.length() == 2) {
 
 ## Next Steps
 
-1. **Implement DisplayManager::handleEmotion()**
-   - Load emotion-specific animations
-   - Play animation when emotion changes
+1. **Create missing emotion animations** (angry, excited, calm) and register them in `DeviceProfile`
+2. **Add unit/integration tests** for `parseEmotionCode()` and end-to-end WS→UI behavior
+3. **Optional: JSON parsing** for extended messages (future)
+4. **Optional: AudioManager emotion handling** (tune TTS parameters per emotion)
 
-2. **Create Emotion Animations**
-   - happy_animation
-   - sad_animation
-   - angry_animation
-   - etc.
-
-3. **Test with Server**
-   - Send emotion codes during SPEAKING phase
-   - Verify animations display correctly
-   - Check StateManager notifications
-
-4. **Optional: JSON Parsing**
-   - Support extended message format
-   - Parse {"emotion": "01", "tone": "excited"}
+Notes: `DisplayManager::handleEmotion()` is already implemented and will play registered animations when the state changes.
 
 ## Testing Checklist
 

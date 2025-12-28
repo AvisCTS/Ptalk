@@ -18,7 +18,7 @@ The system supports **3 primary categories** and **8 total emotion states**:
 2. **HAPPY** - Cheerful, friendly (Code: "01")
 3. **ANGRY** - Alert, urgent (Code: "02")
 4. **EXCITED** - Surprise, delight, enthusiasm (Code: "03")
-5. **SAD** - Empathetic, concerned (Code: "11")
+5. **SAD** - Empathetic, concerned (Code: "10")  # NOTE: code is "10" in `NetworkManager::parseEmotionCode`
 6. **CONFUSED** - Uncertain, seeking clarification (Code: "12")
 7. **CALM** - Soothing, peaceful, reassuring (Code: "13")
 8. **THINKING** - Processing state, internal use (Code: "99")
@@ -32,7 +32,7 @@ Server sends emotion codes as 2-character strings during SPEAKING state:
 "01" → HAPPY
 "02" → ANGRY
 "03" → EXCITED
-"11" → SAD
+"10" → SAD
 "12" → CONFUSED
 "13" → CALM
 "99" → THINKING
@@ -43,7 +43,7 @@ Server sends emotion codes as 2-character strings during SPEAKING state:
 **Simple format (direct emotion code):**
 ```
 "01"
-"11"
+"10"
 "00"
 ```
 
@@ -172,8 +172,10 @@ StateManager::setEmotionState(HAPPY)
 ```
 Server sends:
 "01" → Happy, play happy animation
-"11" → Sad, play sad animation
+"10" → Sad, play sad animation
 "00" → Neutral, play neutral animation
+
+Note: current assets registered by `DeviceProfile` include: `neutral`, `idle`, `listening`, `happy`, `sad`, `thinking`, `stun` (used for CONFUSED). Animations for `angry`, `excited`, and `calm` are not yet implemented.
 ```
 
 ### Example 3: Emotion + other data (future)
@@ -197,11 +199,11 @@ Can be parsed with JSON parsing library (currently not implemented).
 
 ## Next Steps
 
-1. **Implement DisplayManager::handleEmotion()** - Load/play appropriate animations based on emotion
-2. **Add emotion-specific animations** - Create or register animation assets for each emotion
-3. **Implement AudioManager emotion handling** (optional) - Adjust TTS voice parameters based on emotion
-4. **Add JSON parsing** (optional) - Support extended message format with additional parameters
-5. **Testing** - Send test emotion codes from server to verify UI/animation changes
+1. **Add missing emotion animations** - Create and register assets for `angry`, `excited`, and `calm` (DeviceProfile already registers several emotions).
+2. **Add automated tests** - Unit tests for `parseEmotionCode()` and an integration test to send WS messages and assert StateManager and Display updates.
+3. **Optional: AudioManager emotion handling** - Tune TTS parameters per emotion if desired.
+4. **Optional: JSON parsing** - Add support for extended message format (e.g., {"emotion":"01","tone":"excited"}).
+5. **Integration testing** - Verify full flow with server during SPEAKING phase and ensure fallback to NEUTRAL for unknown codes.
 
 ## API Quick Reference
 
@@ -213,8 +215,7 @@ int subscribeEmotion(EmotionCb cb);
 void unsubscribeEmotion(int id);
 
 // AppController
-static state::EmotionState parseEmotionCode(const std::string& code);
-void setupNetworkCallbacks();
+static state::EmotionState parseEmotionCode(const std::string& code);  // wrapper → NetworkManager::parseEmotionCode()
 
 // DisplayManager
 void handleEmotion(state::EmotionState s);
