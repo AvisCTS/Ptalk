@@ -11,6 +11,7 @@
 // State control for audio speak/listen transitions
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "system/BluetoothService.hpp"
 // Ring buffer API to feed downlink audio into AudioManager
 // #include "freertos/ringbuf.h"
 
@@ -249,6 +250,27 @@ namespace user_cfg
 
         nvs_close(h);
         return cfg;
+    }
+
+    static void save_all_settings(const BluetoothService::ConfigData &data)
+    {
+        nvs_handle_t h;
+        if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK)
+        {
+            if (!data.device_name.empty())
+                nvs_set_str(h, "device_name", data.device_name.c_str());
+            if (!data.ssid.empty())
+                nvs_set_str(h, "ssid", data.ssid.c_str());
+            if (!data.pass.empty())
+                nvs_set_str(h, "pass", data.pass.c_str());
+
+            nvs_set_u8(h, "volume", data.volume);
+            nvs_set_u8(h, "brightness", data.brightness);
+
+            nvs_commit(h);
+            nvs_close(h);
+            ESP_LOGI("user_cfg", "All settings saved to NVS via BLE");
+        }
     }
 }
 
@@ -498,6 +520,17 @@ bool DeviceProfile::setup(AppController &app)
 
     prev_interaction_state = new_state; });
 
+    // =========================================================
+    // BluetoothService for BLE-based configuration
+    auto ble_service = std::make_shared<BluetoothService>();
+    ble_service->onConfigComplete([&app](const BluetoothService::ConfigData &data)
+                                  {
+    user_cfg::save_all_settings(data);
+    
+    // Tạo AppEvent mới để AppController biết đã config xong
+    app.postEvent(event::AppEvent::CONFIG_DONE_RESTART); });
+
+    network_mgr->setBluetoothService(ble_service);
     // =========================================================
     // 4️⃣ TOUCH INPUT
     // =========================================================
