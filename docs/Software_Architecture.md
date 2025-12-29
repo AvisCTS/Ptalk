@@ -83,7 +83,7 @@ Mục tiêu chính:
 * Xác định PowerState:
 
   * NORMAL
-  * LOW_BATTERY
+
   * CRITICAL
   * CHARGING
   * FULL_BATTERY
@@ -215,12 +215,14 @@ AudioManager playback → back to IDLE
 
 ```
 PowerDriver read → voltage=3.55V, CHRG=0 →
-PowerManager → LOW_BATTERY →
+PowerManager → CRITICAL →
 StateManager.update →
-AppController.onPowerStateChanged(LOW_BATTERY) →
-DisplayAnimator.showLowBatteryIcon() →
-AudioManager.limitVolume()
+AppController.onPowerStateChanged(CRITICAL) →
+DisplayManager.showCriticalBatteryIcon() →
+AudioManager.stop()
 ```
+
+Note: `LOW_BATTERY` behavior was intentionally removed from the active `PowerState` enum and logic; the system uses `CRITICAL` threshold to enter deep sleep.
 
 ---
 
