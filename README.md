@@ -58,39 +58,48 @@ AppController (Orchestrator)
 PTalk/
 ├── src/
 │   ├── main.cpp                      # Entry point
-│   ├── AppController.cpp/hpp          # Main orchestrator
-│   ├── config.h                      # Configuration constants
+│   ├── AppController.cpp/hpp         # Main orchestrator
+│   ├── Version.hpp                   # App version metadata
+│   ├── config/                       # DeviceProfile and board wiring
+│   │   ├── DeviceProfile.cpp/hpp
+│   ├── assets/                       # Compiled C++ assets (icons, emotions)
 │   ├── system/
-│   │   ├── StateManager.cpp/hpp       # Central state hub
-│   │   ├── StateTypes.hpp             # State enumerations
-│   │   ├── AudioManager.cpp/hpp       # Audio logic
-│   │   ├── DisplayManager.cpp/hpp     # Display logic
-│   │   ├── NetworkManager.cpp/hpp     # Network logic
-│   │   └── PowerManager.cpp/hpp       # Power logic
+│   │   ├── StateManager.cpp/hpp      # Central state hub
+│   │   ├── StateTypes.hpp            # State enumerations
+│   │   ├── AudioManager.cpp/hpp      # Audio logic
+│   │   ├── DisplayManager.cpp/hpp    # Display logic
+│   │   ├── NetworkManager.cpp/hpp    # Network logic
+│   │   ├── PowerManager.cpp/hpp      # Power logic
+│   │   ├── OTAUpdater.cpp/hpp        # OTA support
 │   └── CMakeLists.txt
 ├── lib/
 │   ├── audio/
-│   │   ├── AudioCodec.hpp             # Abstract codec interface
-│   │   ├── AudioInput.hpp/Output.hpp  # Audio I/O abstractions
-│   │   ├── I2SAudioInput_INMP441      # INMP441 mic driver
-│   │   ├── I2SAudioOutput_MAX98357    # MAX98357 speaker driver
-│   │   ├── AdpcmCodec.cpp/hpp         # ADPCM compression
-│   │   └── OpusCodec.cpp/hpp          # Opus compression
+│   │   ├── AudioCodec.hpp            # Abstract codec interface
+│   │   ├── AudioInput.hpp/Output.hpp # Audio I/O abstractions
+│   │   ├── I2SAudioInput_INMP441     # INMP441 mic driver
+│   │   ├── I2SAudioOutput_MAX98357   # MAX98357 speaker driver
+│   │   ├── AdpcmCodec.cpp/hpp        # ADPCM compression
+│   │   └── OpusCodec.cpp/hpp         # Opus compression
 │   ├── display/
-│   │   ├── DisplayDriver.cpp/hpp      # ST7789 low-level driver
-│   │   ├── Framebuffer.cpp/hpp        # Offscreen buffer
-│   │   ├── AnimationPlayer.cpp/hpp    # Multi-frame animation engine
-│   │   └── Font8x8.hpp                # Bitmap font data
+│   │   ├── DisplayDriver.cpp/hpp     # ST7789 low-level driver
+│   │   ├── AnimationPlayer.cpp/hpp   # Multi-frame animation engine
+│   │   └── Font8x8.hpp               # Bitmap font data
 │   ├── network/
-│   │   ├── WifiService.cpp/hpp        # WiFi connectivity
-│   │   ├── WebSocketClient.cpp/hpp    # WebSocket client
-│   │   └── web_page.hpp               # Web UI assets
+│   │   ├── WifiService.cpp/hpp       # WiFi connectivity
+│   │   ├── WebSocketClient.cpp/hpp   # WebSocket client
+│   │   └── web_page.hpp              # Web UI assets
 │   └── power/
-│       └── Power.cpp/hpp              # Power driver (ADC, GPIO)
+│       └── Power.cpp/hpp             # Power driver (ADC, GPIO)
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── EMOTION_SYSTEM.md
+│   ├── EMOTION_REFACTOR_SUMMARY.md
+│   └── Software Architecture.md
+├── scripts/
+├── server_test/
 ├── CMakeLists.txt
 ├── platformio.ini
 ├── sdkconfig.esp32dev
-├── Software Architecture.md
 └── README.md
 ```
 
