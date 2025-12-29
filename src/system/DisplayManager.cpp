@@ -361,7 +361,12 @@ void DisplayManager::handleConnectivity(state::ConnectivityState s)
         playText("WiFi Portal Mode", -1, -1, 0xFFFF, 1.8); // centered, white text
         // playEmotion("sad");
         break;
-
+    case state::ConnectivityState::CONFIG_BLE:
+        // Show text "BLE Config Mode"
+        playText("BLE Config Mode", -1, -1, 0xFFFF, 1.8); // centered, white text
+        // playEmotion("sad");
+        break;
+        
     case state::ConnectivityState::CONNECTING_WS:
         playEmotion("stun");
         break;

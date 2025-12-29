@@ -23,6 +23,7 @@ namespace state
         OFFLINE,         // No network
         CONNECTING_WIFI, // Trying to connect to WiFi
         WIFI_PORTAL,     // Captive portal mode
+        CONFIG_BLE,      // BLE provisioning mode
         CONNECTING_WS,   // Connecting to WebSocket server
         ONLINE           // Connected and operational
     };

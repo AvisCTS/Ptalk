@@ -666,6 +666,7 @@ void AppController::onConnectivityStateChanged(state::ConnectivityState s)
 
     case state::ConnectivityState::CONNECTING_WIFI:
     case state::ConnectivityState::WIFI_PORTAL:
+    case state::ConnectivityState::CONFIG_BLE:
     case state::ConnectivityState::CONNECTING_WS:
     default:
         break;
