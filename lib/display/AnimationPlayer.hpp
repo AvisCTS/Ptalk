@@ -42,7 +42,7 @@ struct Animation1Bit {
  * Plays 1-bit black/white animations with diff encoding:
  *  - Decodes base frame (1-bit) to RGB565 working buffer
  *  - Applies diff blocks for subsequent frames
- *  - Renders to framebuffer at specified position
+ *  - Renders frames directly to display (no framebuffer required)  // direct scanline rendering
  *
  * Note: Không dùng timer riêng — DisplayManager sẽ gọi update().
  */
