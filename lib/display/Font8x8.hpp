@@ -6,9 +6,7 @@
  * ASCII range: 32..127
  * Index mapping: FONT8x8[c - 32]
  *
- * Use with:
- * - Framebuffer::drawText8x8()
- * - DisplayDriver::drawText()
+ * Use with display text helpers such as `DisplayDriver::drawText()` or the helper `drawText8x8()` which render directly to the display.
  */
 
 static const uint8_t FONT8x8[96][8] = {
