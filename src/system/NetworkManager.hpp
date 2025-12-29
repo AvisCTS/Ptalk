@@ -147,6 +147,7 @@ private:
 
     // Retry logic for initial WiFi connection
     void retryWifiThenPortal();
+    void retryWifiThenBLE();
     static void retryWifiTaskEntry(void *arg);
 
     // Receive message from WebSocketClient

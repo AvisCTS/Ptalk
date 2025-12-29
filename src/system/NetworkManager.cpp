@@ -627,7 +627,7 @@ void NetworkManager::retryWifiTaskEntry(void *arg)
     auto *self = static_cast<NetworkManager *>(arg);
     if (self)
     {
-        self->retryWifiThenPortal();
+        self->retryWifiThenBLE();
     }
     vTaskDelete(nullptr);
 }
@@ -682,6 +682,53 @@ void NetworkManager::retryWifiThenPortal()
         wifi->startCaptivePortal(config_.ap_ssid, config_.ap_max_clients, true);
         publishState(state::ConnectivityState::WIFI_PORTAL);
     }
+
+    wifi_retry_task = nullptr;
+}
+
+void NetworkManager::retryWifiThenBLE()
+{
+    const int max_retries = 10;
+
+    ESP_LOGI(TAG, "Starting WiFi retry phase (5 seconds)");
+
+    for (int i = 0; i < max_retries; i++)
+    {
+        if (wifi && wifi->isConnected())
+        {
+            ESP_LOGI(TAG, "WiFi connected during retry");
+            wifi_retry_task = nullptr;
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    if (wifi && wifi->isConnected())
+    {
+        ESP_LOGI(TAG, "WiFi connected after retry");
+        wifi_retry_task = nullptr;
+        return;
+    }
+
+    ESP_LOGW(TAG, "WiFi unavailable after retry - switching to BLE config mode");
+
+    // 1. Dừng WiFi (quan trọng)
+    if (wifi)
+    {
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    // TODO: nếu cần esp_wifi_deinit() để giải phóng RF cho BLE thì xử lý ở đây
+
+    // 2. Bật BLE
+    if (bluetooth)
+    {
+        bluetooth->start();
+    }
+
+    // 3. Publish state
+    publishState(state::ConnectivityState::CONFIG_BLE);
 
     wifi_retry_task = nullptr;
 }
