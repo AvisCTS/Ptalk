@@ -134,6 +134,7 @@ public:
     // Control captive portal explicitly
     void stopPortal();
 
+    void startBLEConfigMode();
     // ======================================================
     // Emotion code parsing (from WebSocket messages)
     // ======================================================

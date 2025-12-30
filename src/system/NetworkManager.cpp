@@ -717,23 +717,31 @@ void NetworkManager::retryWifiThenBLE()
     if (wifi)
     {
         wifi->disconnect();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 
     // TODO: nếu cần esp_wifi_deinit() để giải phóng RF cho BLE thì xử lý ở đây
 
     // 2. Bật BLE
-   if (ble_service) {
-        ble_service->init(config_.ap_ssid); // Dùng tên PTalk làm tên Bluetooth
-        ble_service->start();
-    }
+//    if (ble_service) {
+//         ble_service->init(config_.ap_ssid); // Dùng tên PTalk làm tên Bluetooth
+//         ble_service->start();
+//     }
 
     // 3. Publish state
     publishState(state::ConnectivityState::CONFIG_BLE);
 
     wifi_retry_task = nullptr;
+    vTaskDelete(NULL); 
 }
 
+void NetworkManager::startBLEConfigMode() {
+    if (ble_service) {
+        ESP_LOGW(TAG, "Start BLE Config Mode now (RAM should be free)");
+        ble_service->init(config_.ap_ssid); 
+        ble_service->start();
+    }
+}
 // ============================================================================
 // EMOTION CODE PARSING
 // ============================================================================
