@@ -511,7 +511,7 @@ void AppController::processQueue()
 
                     esp_restart();
                     break;
-                
+
                 case event::AppEvent::WAKE_REQUEST:
                     wake();
                     break;
@@ -674,11 +674,31 @@ void AppController::onConnectivityStateChanged(state::ConnectivityState s)
             // TODO: audio->readyForStream();
         }
         break;
-
-    case state::ConnectivityState::CONNECTING_WIFI:
-    case state::ConnectivityState::WIFI_PORTAL:
     case state::ConnectivityState::CONFIG_BLE:
+        ESP_LOGW(TAG, "Config Mode: Cleaning up Audio to free ~72KB RAM...");
+
+        // 1. Dừng Task và Xóa các StreamBuffer Audio (Giải phóng 72KB RAM)
+        if (audio)
+        {
+            audio->stop();
+            audio->freeResources(); // Bạn cần viết hàm này để delete StreamBuffers
+        }
+
+        // 2. Delay 1 chút để RAM kịp ổn định
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        // 3. Bây giờ mới thực sự cho phép BLE khởi tạo
+        if (network)
+        {
+            network->startBLEConfigMode();
+        }
+        break;
+    case state::ConnectivityState::CONNECTING_WIFI:
+        break;
+    case state::ConnectivityState::WIFI_PORTAL:
+        break;
     case state::ConnectivityState::CONNECTING_WS:
+        break;
     default:
         break;
     }
