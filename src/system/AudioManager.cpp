@@ -174,6 +174,52 @@ void AudioManager::stop()
     waitForExit(spk_task);
 }
 
+bool AudioManager::allocateResources()
+{
+    if (sb_mic_pcm != nullptr)
+        return true; // Đã cấp phát rồi
+
+    ESP_LOGW(TAG, "Allocating Audio Stream Buffers...");
+
+    sb_mic_pcm = xStreamBufferCreate(4 * 1024, 1);
+    sb_mic_encoded = xStreamBufferCreate(32 * 1024, 1);
+    sb_spk_pcm = xStreamBufferCreate(4 * 1024, 1);
+    sb_spk_encoded = xStreamBufferCreate(16 * 1024, 1);
+
+    if (!sb_mic_pcm || !sb_mic_encoded || !sb_spk_pcm || !sb_spk_encoded)
+    {
+        ESP_LOGE(TAG, "Failed to allocate audio buffers - OUT OF RAM!");
+        return false;
+    }
+    return true;
+}
+
+void AudioManager::freeResources()
+{
+    stop();
+    if (sb_mic_pcm)
+    {
+        vStreamBufferDelete(sb_mic_pcm);
+        sb_mic_pcm = nullptr;
+    }
+    if (sb_mic_encoded)
+    {
+        vStreamBufferDelete(sb_mic_encoded);
+        sb_mic_encoded = nullptr;
+    }
+    if (sb_spk_pcm)
+    {
+        vStreamBufferDelete(sb_spk_pcm);
+        sb_spk_pcm = nullptr;
+    }
+    if (sb_spk_encoded)
+    {
+        vStreamBufferDelete(sb_spk_encoded);
+        sb_spk_encoded = nullptr;
+    }
+    ESP_LOGI(TAG, "AudioManager resources freed");
+}
+
 // ============================================================================
 // State handling
 // ============================================================================
@@ -214,21 +260,24 @@ void AudioManager::handleInteractionState(state::InteractionState s,
 // ============================================================================
 void AudioManager::startListening(state::InputSource src)
 {
-    if (listening) return;
+    if (listening)
+        return;
 
     ESP_LOGI(TAG, "Start listening (Interruption handled)");
-    
+
     // 1. Dừng ngay việc phát loa nếu đang nói
-    if (speaking) {
+    if (speaking)
+    {
         stopSpeaking(); // Hàm này sẽ gọi output->stopPlayback()
     }
 
     // 2. XÓA SẠCH các buffer âm thanh cũ của loa
     xStreamBufferReset(sb_spk_encoded); // Xóa dữ liệu nén chưa kịp giải mã
     xStreamBufferReset(sb_spk_pcm);     // Xóa dữ liệu PCM chưa kịp phát ra loa
-    
+
     // 3. Reset Codec để xóa bộ nhớ đệm của ADPCM (tránh tiếng nổ/rè cho câu sau)
-    if (codec) {
+    if (codec)
+    {
         codec->reset();
     }
 

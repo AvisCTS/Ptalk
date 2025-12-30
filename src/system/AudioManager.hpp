@@ -36,6 +36,8 @@ public:
     void start();
     void stop();
 
+    bool allocateResources() ;
+    void freeResources();
     // ------------------------------------------------------------------------
     // Dependency injection
     // ------------------------------------------------------------------------
