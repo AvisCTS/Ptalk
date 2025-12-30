@@ -1,160 +1,159 @@
 #include "BluetoothService.hpp"
-#include <string>
+#include "esp_log.h"
 #include <cstring>
 
-// NimBLE core
-#include "nimble/nimble_port.h"
-#include "services/gap/ble_svc_gap.h"
-#include "services/gatt/ble_svc_gatt.h"
+static const char* TAG = "BT_SVC";
 
-#undef min
-#undef max
+BluetoothService* BluetoothService::s_instance = nullptr;
 
-static const char* BLE_TAG = "NimBLE_SVC";
-
-// Khởi tạo static members
-BluetoothService::ConfigData BluetoothService::temp_cfg;
-BluetoothService::OnConfigComplete BluetoothService::config_cb = nullptr;
-std::string BluetoothService::s_adv_name = "PTalk";
-
-// ============================================================================
-// KHỞI TẠO UUID THỦ CÔNG (Sửa lỗi expected primary-expression)
-// ============================================================================
-static const ble_uuid16_t g_svc_uuid      = { {BLE_UUID_TYPE_16}, BluetoothService::SVC_UUID_CONFIG };
-static const ble_uuid16_t g_chr_name_uuid = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_DEVICE_NAME };
-static const ble_uuid16_t g_chr_vol_uuid  = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_VOLUME };
-static const ble_uuid16_t g_chr_bri_uuid  = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_BRIGHTNESS };
-static const ble_uuid16_t g_chr_ssid_uuid = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_WIFI_SSID };
-static const ble_uuid16_t g_chr_pass_uuid = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_WIFI_PASS };
-static const ble_uuid16_t g_chr_ver_uuid  = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_APP_VERSION };
-static const ble_uuid16_t g_chr_info_uuid = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_BUILD_INFO };
-static const ble_uuid16_t g_chr_save_uuid = { {BLE_UUID_TYPE_16}, BluetoothService::CHR_UUID_SAVE_CMD };
-
-// ============================================================================
-// GATT ACCESS CALLBACK
-// ============================================================================
-int BluetoothService::gatt_svr_access(uint16_t conn_handle, uint16_t attr_handle, 
-                                      struct ble_gatt_access_ctxt *ctxt, void *arg) 
-{
-    uint16_t uuid16 = ble_uuid_u16(ctxt->chr->uuid);
-
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        switch (uuid16) {
-            case CHR_UUID_APP_VERSION:
-                return os_mbuf_append(ctxt->om, app_meta::APP_VERSION, strlen(app_meta::APP_VERSION));
-            
-            case CHR_UUID_BUILD_INFO: {
-                std::string info = std::string(app_meta::DEVICE_MODEL) + " (" + app_meta::BUILD_DATE + ")";
-                return os_mbuf_append(ctxt->om, info.c_str(), info.length());
-            }
-
-            case CHR_UUID_DEVICE_NAME:
-                return os_mbuf_append(ctxt->om, temp_cfg.device_name.c_str(), temp_cfg.device_name.length());
-
-            case CHR_UUID_VOLUME:
-                return os_mbuf_append(ctxt->om, &temp_cfg.volume, 1);
-
-            case CHR_UUID_BRIGHTNESS:
-                return os_mbuf_append(ctxt->om, &temp_cfg.brightness, 1);
-
-            default: return BLE_ATT_ERR_READ_NOT_PERMITTED;
-        }
-    }
-
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        switch (uuid16) {
-            case CHR_UUID_DEVICE_NAME:
-                temp_cfg.device_name.assign((char*)ctxt->om->om_data, ctxt->om->om_len);
-                break;
-            case CHR_UUID_VOLUME:
-                temp_cfg.volume = ctxt->om->om_data[0];
-                break;
-            case CHR_UUID_BRIGHTNESS:
-                temp_cfg.brightness = ctxt->om->om_data[0];
-                break;
-            case CHR_UUID_WIFI_SSID:
-                temp_cfg.ssid.assign((char*)ctxt->om->om_data, ctxt->om->om_len);
-                break;
-            case CHR_UUID_WIFI_PASS:
-                temp_cfg.pass.assign((char*)ctxt->om->om_data, ctxt->om->om_len);
-                break;
-            case CHR_UUID_SAVE_CMD:
-                if (ctxt->om->om_len > 0 && ctxt->om->om_data[0] == 1) {
-                    if (config_cb) config_cb(temp_cfg);
-                }
-                break;
-        }
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
+BluetoothService::BluetoothService() {
+    s_instance = this;
 }
 
-// ============================================================================
-// GATT TABLE (Sử dụng con trỏ đến các biến tĩnh g_...)
-// ============================================================================
-static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
-    {
-        .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = (const ble_uuid_t *)&g_svc_uuid,
-        .characteristics = (struct ble_gatt_chr_def[]) {
-            {.uuid = (const ble_uuid_t *)&g_chr_name_uuid, .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
-            {.uuid = (const ble_uuid_t *)&g_chr_vol_uuid,  .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
-            {.uuid = (const ble_uuid_t *)&g_chr_bri_uuid,  .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
-            {.uuid = (const ble_uuid_t *)&g_chr_ssid_uuid, .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_WRITE},
-            {.uuid = (const ble_uuid_t *)&g_chr_pass_uuid, .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_WRITE},
-            {.uuid = (const ble_uuid_t *)&g_chr_ver_uuid,  .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_READ},
-            {.uuid = (const ble_uuid_t *)&g_chr_info_uuid, .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_READ},
-            {.uuid = (const ble_uuid_t *)&g_chr_save_uuid, .access_cb = BluetoothService::gatt_svr_access, .flags = BLE_GATT_CHR_F_WRITE},
-            {0}
-        },
-    },
-    {0}
-};
-
-// ============================================================================
-// VÒNG ĐỜI
-// ============================================================================
-BluetoothService::BluetoothService() = default;
-BluetoothService::~BluetoothService() { stop(); }
-
-void BluetoothService::on_stack_sync() {
-    ble_svc_gap_device_name_set(s_adv_name.c_str());
-    struct ble_hs_adv_fields fields;
-    memset(&fields, 0, sizeof(fields));
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t*)s_adv_name.c_str();
-    fields.name_len = (uint8_t)s_adv_name.length();
-    fields.name_is_complete = 1;
-    ble_gap_adv_set_fields(&fields);
-
-    struct ble_gap_adv_params adv_params;
-    memset(&adv_params, 0, sizeof(adv_params));
-    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
-    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &adv_params, NULL, NULL);
-    ESP_LOGI(BLE_TAG, "Advertising Started");
+BluetoothService::~BluetoothService() {
+    stop();
 }
 
 bool BluetoothService::init(const std::string& adv_name) {
-    s_adv_name = adv_name;
-    nimble_port_init();
-    ble_hs_cfg.sync_cb = BluetoothService::on_stack_sync;
-    ble_svc_gap_init();
-    ble_svc_gatt_init();
-    ble_gatts_count_cfg(gatt_svr_svcs);
-    ble_gatts_add_svcs(gatt_svr_svcs);
+    static bool s_bt_initialized = false;
+    if (s_bt_initialized) return true;
+
+    adv_name_ = adv_name;
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    if (esp_bt_controller_init(&bt_cfg) != ESP_OK) return false;
+    if (esp_bt_controller_enable(ESP_BT_MODE_BLE) != ESP_OK) return false;
+    if (esp_bluedroid_init() != ESP_OK) return false;
+    if (esp_bluedroid_enable() != ESP_OK) return false;
+
+    esp_ble_gatts_register_callback(BluetoothService::gattsEventHandler);
+    esp_ble_gap_register_callback(BluetoothService::gapEventHandler);
+    esp_ble_gatts_app_register(0);
+
+    s_bt_initialized = true;
     return true;
 }
 
-void BluetoothService::start() {
-    if (started) return;
-    started = true;
-    xTaskCreatePinnedToCore([](void* arg){ nimble_port_run(); }, "nimble", 4096, NULL, 5, NULL, 0);
+bool BluetoothService::start() {
+    if (started_) return true;
+    
+    esp_ble_adv_params_t adv_params = {};
+    adv_params.adv_int_min       = 0x20;
+    adv_params.adv_int_max       = 0x40;
+    adv_params.adv_type          = ADV_TYPE_IND;
+    adv_params.own_addr_type     = BLE_ADDR_TYPE_PUBLIC;
+    adv_params.channel_map       = ADV_CHNL_ALL;
+    adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
+
+    esp_ble_gap_set_device_name(adv_name_.c_str());
+    esp_ble_gap_start_advertising(&adv_params);
+    
+    started_ = true;
+    ESP_LOGI(TAG, "BLE Advertising started: %s", adv_name_.c_str());
+    return true;
 }
 
 void BluetoothService::stop() {
-    if (!started) return;
-    nimble_port_stop();
-    nimble_port_deinit();
-    started = false;
+    if (!started_) return;
+    esp_ble_gap_stop_advertising();
+    started_ = false;
 }
+
+void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param) {
+    if (!s_instance) return;
+
+    switch (event) {
+        case ESP_GATTS_REG_EVT: {
+            esp_gatt_srvc_id_t service_id;
+            service_id.is_primary = true;
+            service_id.id.inst_id = 0x00;
+            service_id.id.uuid.len = ESP_UUID_LEN_16;
+            service_id.id.uuid.uuid.uuid16 = SVC_UUID_CONFIG;
+            esp_ble_gatts_create_service(gatts_if, &service_id, 25); 
+            break;
+        }
+
+        case ESP_GATTS_CREATE_EVT: {
+            s_instance->gatts_if_ = gatts_if; // Lưu interface ID
+            s_instance->service_handle_ = param->create.service_handle;
+            esp_ble_gatts_start_service(s_instance->service_handle_);
+
+            auto add_c = [&](uint16_t uuid, uint8_t prop) {
+                esp_bt_uuid_t char_uuid;
+                char_uuid.len = ESP_UUID_LEN_16;
+                char_uuid.uuid.uuid16 = uuid;
+                esp_ble_gatts_add_char(s_instance->service_handle_, &char_uuid, 
+                    ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, prop, NULL, NULL);
+            };
+
+            add_c(CHR_UUID_DEVICE_NAME, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
+            add_c(CHR_UUID_VOLUME,      ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
+            add_c(CHR_UUID_BRIGHTNESS,  ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
+            add_c(CHR_UUID_WIFI_SSID,   ESP_GATT_CHAR_PROP_BIT_WRITE);
+            add_c(CHR_UUID_WIFI_PASS,   ESP_GATT_CHAR_PROP_BIT_WRITE);
+            add_c(CHR_UUID_APP_VERSION, ESP_GATT_CHAR_PROP_BIT_READ);
+            add_c(CHR_UUID_BUILD_INFO,  ESP_GATT_CHAR_PROP_BIT_READ);
+            add_c(CHR_UUID_SAVE_CMD,    ESP_GATT_CHAR_PROP_BIT_WRITE);
+            break;
+        }
+
+        case ESP_GATTS_ADD_CHAR_EVT: {
+            static int char_idx = 0;
+            if (char_idx < 8) s_instance->char_handles[char_idx++] = param->add_char.attr_handle;
+            break;
+        }
+
+        case ESP_GATTS_CONNECT_EVT:
+            s_instance->conn_id_ = param->connect.conn_id;
+            break;
+
+        case ESP_GATTS_WRITE_EVT:
+            s_instance->handleWrite(param);
+            break;
+
+        case ESP_GATTS_READ_EVT:
+            s_instance->handleRead(param, gatts_if);
+            break;
+
+        default: break;
+    }
+}
+
+void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param) {
+    uint16_t h = param->write.handle;
+    uint8_t* v = param->write.value;
+    uint16_t l = param->write.len;
+
+    if (h == char_handles[0]) temp_cfg_.device_name.assign((char*)v, l);
+    else if (h == char_handles[1]) temp_cfg_.volume = v[0];
+    else if (h == char_handles[2]) temp_cfg_.brightness = v[0];
+    else if (h == char_handles[3]) temp_cfg_.ssid.assign((char*)v, l);
+    else if (h == char_handles[4]) temp_cfg_.pass.assign((char*)v, l);
+    else if (h == char_handles[7]) {
+        if (l > 0 && v[0] == 0x01 && config_cb_) config_cb_(temp_cfg_);
+    }
+
+    if (param->write.need_rsp) {
+        // Đã sửa lỗi: truyền gatts_if_ thay vì NULL
+        esp_ble_gatts_send_response(gatts_if_, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, NULL);
+    }
+}
+
+void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t gatts_if) {
+    esp_gatt_rsp_t rsp = {};
+    rsp.attr_value.handle = param->read.handle;
+
+    if (param->read.handle == char_handles[5]) {
+        rsp.attr_value.len = strlen(app_meta::APP_VERSION);
+        memcpy(rsp.attr_value.value, app_meta::APP_VERSION, rsp.attr_value.len);
+    } else if (param->read.handle == char_handles[6]) {
+        std::string info = std::string(app_meta::DEVICE_MODEL) + " (" + app_meta::BUILD_DATE + ")";
+        rsp.attr_value.len = info.length();
+        memcpy(rsp.attr_value.value, info.c_str(), rsp.attr_value.len);
+    }
+
+    esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, ESP_GATT_OK, &rsp);
+}
+
+void BluetoothService::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {}

@@ -5,11 +5,11 @@
 #include <vector>
 #include <cstdint>
 
-// NimBLE headers
-#include "host/ble_hs.h"
-#undef min
-#undef max
-
+#include "esp_bt.h"
+#include "esp_gap_ble_api.h"
+#include "esp_gatts_api.h"
+#include "esp_bt_main.h"
+#include "esp_gatt_common_api.h"
 #include "Version.hpp"
 
 class BluetoothService
@@ -17,8 +17,8 @@ class BluetoothService
 public:
     struct ConfigData {
         std::string device_name = "PTalk";
-        uint8_t volume = 30;
-        uint8_t brightness = 100;
+        uint8_t volume      = 30;
+        uint8_t brightness  = 100;
         std::string ssid;
         std::string pass;
     };
@@ -29,14 +29,12 @@ public:
     ~BluetoothService();
 
     bool init(const std::string& adv_name);
-    void start();
+    bool start();
     void stop();
-    void onConfigComplete(OnConfigComplete cb) { config_cb = cb; }
 
-    // Callback xử lý GATT (Phải để public để struct bên ngoài truy cập được)
-    static int gatt_svr_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg);
+    // Đã sửa lỗi: trỏ đúng vào config_cb_ (có dấu gạch dưới)
+    void onConfigComplete(OnConfigComplete cb) { config_cb_ = cb; }
 
-    // UUIDs
     static constexpr uint16_t SVC_UUID_CONFIG      = 0xFF01;
     static constexpr uint16_t CHR_UUID_DEVICE_NAME = 0xFF02;
     static constexpr uint16_t CHR_UUID_VOLUME      = 0xFF03;
@@ -48,10 +46,21 @@ public:
     static constexpr uint16_t CHR_UUID_SAVE_CMD    = 0xFF09;
 
 private:
-    static void on_stack_sync();
+    static BluetoothService* s_instance;
+    static void gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+    static void gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
+    
+    void handleWrite(esp_ble_gatts_cb_param_t *param);
+    void handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t gatts_if);
 
-    static ConfigData temp_cfg;
-    static OnConfigComplete config_cb;
-    static std::string s_adv_name;
-    bool started = false;
+private:
+    std::string adv_name_;
+    bool started_ = false;
+    esp_gatt_if_t gatts_if_ = 0; // Lưu interface ID
+    uint16_t conn_id_ = 0xFFFF;
+    uint16_t service_handle_ = 0;
+    uint16_t char_handles[8] = {0}; // Lưu handle của 8 đặc tính
+    
+    ConfigData temp_cfg_;
+    OnConfigComplete config_cb_ = nullptr;
 };
