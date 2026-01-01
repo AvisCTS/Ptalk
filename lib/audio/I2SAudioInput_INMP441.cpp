@@ -16,51 +16,53 @@ I2SAudioInput_INMP441::~I2SAudioInput_INMP441()
 // ============================================================================
 // Lifecycle
 // ============================================================================
-
-bool I2SAudioInput_INMP441::startCapture()
-{
-    if (running)
-        return true;
-
-    i2s_driver_uninstall(cfg_.i2s_port); // Dọn dẹp sạch port
-
+// Thêm hàm Init riêng
+bool I2SAudioInput_INMP441::init() {
+    ESP_LOGI(TAG, "Initializing I2S Driver once...");
+    
     i2s_config_t i2s_cfg = {};
     i2s_cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
     i2s_cfg.sample_rate = cfg_.sample_rate;
     i2s_cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
-
-    // BẮT BUỘC: Đọc cả 2 kênh để tạo 64 xung clock cho ICS43434
     i2s_cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
-
-    i2s_cfg.communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S);
-    i2s_cfg.dma_buf_count = 4;
-    i2s_cfg.dma_buf_len = 512;
+    i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_cfg.dma_buf_count = 6; 
+    i2s_cfg.dma_buf_len = 256;
     i2s_cfg.use_apll = false;
     i2s_cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
 
+    // Cài đặt driver
     esp_err_t err = i2s_driver_install(cfg_.i2s_port, &i2s_cfg, 0, nullptr);
-    if (err != ESP_OK)
-        return false;
+    if (err != ESP_OK) return false;
 
+    // Cấu hình Pin
     i2s_pin_config_t pin_cfg = {
         .mck_io_num = I2S_PIN_NO_CHANGE,
         .bck_io_num = cfg_.pin_bck,
         .ws_io_num = cfg_.pin_ws,
         .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = cfg_.pin_din};
+        .data_in_num = cfg_.pin_din
+    };
     i2s_set_pin(cfg_.i2s_port, &pin_cfg);
 
-    running = true;
+    // Dừng ngay sau khi init để tiết kiệm điện, khi nào cần thu mới start
+    i2s_stop(cfg_.i2s_port); 
     return true;
 }
-void I2SAudioInput_INMP441::stopCapture()
-{
-    if (!running)
-        return;
 
-    i2s_stop(cfg_.i2s_port);
+bool I2SAudioInput_INMP441::startCapture() {
+    if (running) return true;
+    ESP_LOGI(TAG, "I2S Start");
+    esp_err_t err = i2s_start(cfg_.i2s_port); // Không install lại, chỉ start
+    if (err == ESP_OK) running = true;
+    return running;
+}
+
+void I2SAudioInput_INMP441::stopCapture() {
+    if (!running) return;
+    ESP_LOGI(TAG, "I2S Stop");
+    i2s_stop(cfg_.i2s_port); // Không uninstall, chỉ stop
     running = false;
-    ESP_LOGI(TAG, "INMP441 capture stopped");
 }
 
 void I2SAudioInput_INMP441::pauseCapture()
@@ -84,7 +86,7 @@ size_t I2SAudioInput_INMP441::readPcm(int16_t* pcm, size_t max_samples)
     int32_t raw_buf[max_samples * 2]; 
     size_t bytes_read = 0;
 
-    esp_err_t res = i2s_read(cfg_.i2s_port, raw_buf, sizeof(raw_buf), &bytes_read, pdMS_TO_TICKS(20));
+    esp_err_t res = i2s_read(cfg_.i2s_port, raw_buf, sizeof(raw_buf), &bytes_read, pdMS_TO_TICKS(100));
     if (res != ESP_OK || bytes_read == 0) return 0;
 
     size_t actual_samples = bytes_read / sizeof(int32_t);

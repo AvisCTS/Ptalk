@@ -32,6 +32,8 @@ public:
     explicit I2SAudioInput_INMP441(const Config& cfg);
     ~I2SAudioInput_INMP441() override;
 
+    bool init() override;
+
     // ========================================================================
     // AudioInput interface
     // ========================================================================
