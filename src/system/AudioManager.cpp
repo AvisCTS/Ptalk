@@ -375,11 +375,18 @@ void AudioManager::micTaskLoop()
     {
         if (!listening || power_saving)
         {
-            vTaskDelay(pdMS_TO_TICKS(10));
+            // ESP_LOGI(TAG, "MIC loop: %s, power_saving=%d",
+            //          listening ? "listening" : "not listening",
+            //          power_saving.load());
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
         size_t samples = input->readPcm(pcm_buf, PCM_FRAME);
+        // if (samples > 0)
+        // {
+        //     ESP_LOGI(TAG, "MIC got %zu samples", samples);
+        // }
         if (samples == 0)
             continue;
 
@@ -435,7 +442,7 @@ void AudioManager::codecTaskLoop()
                 samples,
                 encoded,
                 sizeof(encoded));
-
+            // ESP_LOGD(TAG, "Encoded %zu PCM samples to %zu bytes", samples, enc_len);
             if (enc_len > 0)
             {
                 xStreamBufferSend(
@@ -453,7 +460,7 @@ void AudioManager::codecTaskLoop()
         {
             xStreamBufferReset(sb_spk_encoded);
             xStreamBufferReset(sb_spk_pcm);
-            codec->reset();
+            // codec->reset();
             new_decode_session = true;
 
             vTaskDelay(pdMS_TO_TICKS(5));
