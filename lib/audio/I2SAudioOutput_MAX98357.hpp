@@ -52,5 +52,5 @@ private:
 
     bool running = false;
     bool i2s_installed = false;
-    uint8_t volume = 10;  // 10% volume
+    uint8_t volume = 60;  // 60% volume
 };
