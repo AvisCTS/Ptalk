@@ -52,6 +52,12 @@ bool AudioManager::init()
         return false;
     }
 
+    if (!input->init())
+    {
+        ESP_LOGE(TAG, "Failed to init Audio Input hardware");
+        return false;
+    }
+
     // -------------------------------
     // Stream buffers (FreeRTOS - thread-safe, no race conditions)
     // -------------------------------
@@ -105,9 +111,9 @@ void AudioManager::start()
         "AudioMicTask",
         4096,
         this,
-        5,
+        6,
         &mic_task,
-        0 // Core 0
+        1 // Core 0
     );
 
     // -------------------------------
@@ -118,9 +124,9 @@ void AudioManager::start()
         "AudioCodecTask",
         8192, // Stack for codec operations
         this,
-        4, // Priority 4 - between mic and speaker
+        5, // Priority 5 - between mic and speaker
         &codec_task,
-        0 // Core 0 with mic task
+        1 // Core 0 with mic task
     );
 
     // -------------------------------
@@ -131,7 +137,7 @@ void AudioManager::start()
         "AudioSpkTask",
         4096, // Reduced stack - no longer doing decode
         this,
-        3, // Priority 3 - below WiFi task (prio 23) to prevent beacon timeout
+        6, // Priority 6 - below WiFi task (prio 23) to prevent beacon timeout
         &spk_task,
         1 // Core 1 for smooth playback
     );
@@ -286,6 +292,7 @@ void AudioManager::startListening(state::InputSource src)
     speaking = false;
 
     // 4. Bắt đầu thu âm
+
     input->startCapture();
 }
 
@@ -303,6 +310,7 @@ void AudioManager::stopListening()
         return;
     ESP_LOGI(TAG, "Stop listening");
     listening = false;
+
     input->stopCapture();
 }
 
@@ -388,15 +396,21 @@ void AudioManager::micTaskLoop()
         //     ESP_LOGI(TAG, "MIC got %zu samples", samples);
         // }
         if (samples == 0)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5));
             continue;
-
+        }
         size_t bytes = samples * sizeof(int16_t);
 
-        xStreamBufferSend(
+        size_t sent = xStreamBufferSend(
             sb_mic_pcm,
             reinterpret_cast<uint8_t *>(pcm_buf),
             bytes,
             pdMS_TO_TICKS(10));
+        if (sent < bytes)
+        {
+            ESP_LOGW("MIC", "Buffer Full! Dropped %zu bytes", bytes - sent);
+        }
     }
 
     ESP_LOGW(TAG, "MIC task stopped");
