@@ -17,7 +17,7 @@ class BluetoothService
 public:
     struct ConfigData {
         std::string device_name = "PTalk";
-        uint8_t volume      = 30;
+        uint8_t volume      = 60;
         uint8_t brightness  = 100;
         std::string ssid;
         std::string pass;
