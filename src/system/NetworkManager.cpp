@@ -496,83 +496,50 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
 // Task loop gửi dữ liệu lên Server
 void NetworkManager::uplinkTaskLoop()
 {
-    const size_t SEND_SIZE = 512; 
+    const size_t SEND_SIZE = 512;
     uint8_t send_buf[SEND_SIZE];
-    size_t acc = 0; // accumulated bytes in send_buf
-
-    ESP_LOGI(TAG, "Uplink task started (Strict 512-byte mode)");
-
-    // Sanity: ensure mic buffer assigned
-    if (!mic_encoded_sb) {
-        ESP_LOGE(TAG, "Uplink aborted: mic_encoded_sb not set");
-        uplink_task_handle = nullptr;
-        vTaskDelete(nullptr);
-        return;
-    }
+    size_t acc = 0;
 
     while (started)
     {
-        // 1. Kiểm tra trạng thái hiện tại
         bool is_listening = (StateManager::instance().getInteractionState() == state::InteractionState::LISTENING);
-        
-        // Nếu WebSocket mất kết nối, thoát luôn
-        if (!ws_running) {
-            ESP_LOGE(TAG, "Uplink aborted: WS disconnected");
+
+        if (!ws_running)
             break;
-        }
 
-        // 2. Logic thoát task: Nếu đã thả nút VÀ buffer đã cạn sạch dữ liệu
-        if (!is_listening && xStreamBufferIsEmpty(mic_encoded_sb) && acc == 0) {
-            ESP_LOGI(TAG, "Uplink finished: All audio data sent to server");
+        // Nếu hết listening và buffer trống thì thoát
+        if (!is_listening && xStreamBufferIsEmpty(mic_encoded_sb) && acc == 0)
             break;
+
+        // Đọc dữ liệu: Chờ tối đa 100ms để gom đủ dữ liệu
+        // Việc Block ở đây không hề tốn CPU, giúp Task khác (Display) chạy thoải mái
+        size_t want = SEND_SIZE - acc;
+        size_t got = xStreamBufferReceive(mic_encoded_sb, send_buf + acc, want, pdMS_TO_TICKS(100));
+
+        if (got > 0)
+        {
+            acc += got;
         }
 
-        // 3. Đọc dữ liệu từ buffer (tập hợp cho đủ 512 bytes)
-        // Nếu đang listening: Đợi tối đa 50ms để gom đủ 512 bytes
-        // Nếu đã thả nút (vét buffer): Không chờ (timeout = 0) để xử lý nhanh đoạn cuối
-        TickType_t wait_time = is_listening ? pdMS_TO_TICKS(50) : 0;
-
-        if (acc < SEND_SIZE) {
-            size_t want = SEND_SIZE - acc;
-            size_t got = xStreamBufferReceive(mic_encoded_sb, send_buf + acc, want, wait_time);
-            if (got > 0) {
-                acc += got;
-                ESP_LOGD(TAG, "Uplink read %zu bytes (acc=%zu)", got, acc);
-            }
-        }
-
-        // Nếu đủ 512 bytes thì gửi
+        // Khi đủ 512 bytes thì gửi ngay lập tức
         if (acc == SEND_SIZE)
         {
             ws->sendBinary(send_buf, SEND_SIZE);
-            ESP_LOGD(TAG, "Uplink sent full frame (%zu bytes)", SEND_SIZE);
-            acc = 0; // reset accumulator
-            continue;
+            acc = 0;
+            // Không vTaskDelay ở đây để có thể gửi liên tiếp nếu buffer đang đầy
         }
 
-        // Nếu đã stop listening và còn bytes dội lại thì gửi khung cuối (padding)
-        if (!is_listening && acc > 0)
+        // Đoạn vét buffer cuối cùng khi ngừng thu âm
+        if (!is_listening && acc > 0 && xStreamBufferIsEmpty(mic_encoded_sb))
         {
             memset(send_buf + acc, 0, SEND_SIZE - acc);
             ws->sendBinary(send_buf, SEND_SIZE);
-            ESP_LOGI(TAG, "Sent final padded frame (%zu bytes real data)", acc);
-            break; // Gửi nốt là xong, thoát task
-        }
-
-        // Nếu đang listening nhưng chưa có dữ liệu, nghỉ chút để nhường CPU
-        if (is_listening && acc == 0)
-        {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        else if (is_listening)
-        {
-            // Partial data present, short backoff while waiting for remainder
-            vTaskDelay(pdMS_TO_TICKS(5));
+            break;
         }
     }
-
     // 4. Dọn dẹp an toàn
-    if (mic_encoded_sb) {
+    if (mic_encoded_sb)
+    {
         xStreamBufferReset(mic_encoded_sb);
     }
     uplink_task_handle = nullptr;
@@ -612,7 +579,7 @@ void NetworkManager::handleInteractionState(state::InteractionState s)
                 this,
                 5,
                 &uplink_task_handle,
-                0 // Core 0
+                1 // Core 0
             );
         }
     }

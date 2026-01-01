@@ -295,6 +295,7 @@ void WifiService::init()
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); 
     registerEvents();
     ESP_LOGI(TAG, "WifiService initialized");
 }
@@ -597,6 +598,9 @@ void WifiService::startSTA()
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    esp_wifi_set_ps(WIFI_PS_NONE); 
+
     wifi_started = true;
     ESP_LOGI(TAG, "WiFi STA started. Connecting to SSID: %s (password: %s)",
              sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
