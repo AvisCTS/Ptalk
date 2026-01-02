@@ -167,7 +167,7 @@ size_t AdpcmCodec::decode(const uint8_t *data,
 // ===================================================
 
 size_t AdpcmCodec::pcmFrameSamples() const { return 256; }
-size_t AdpcmCodec::encodedFrameBytes() const { return 512; }
+size_t AdpcmCodec::encodedFrameBytes() const { return 128; }
 
 uint32_t AdpcmCodec::sampleRate() const { return sample_rate_; }
 uint8_t AdpcmCodec::channels() const { return 1; }
