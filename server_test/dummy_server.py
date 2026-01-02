@@ -112,10 +112,10 @@ HOST = "0.0.0.0"
 PORT = 8000
 SAMPLE_RATE = 16000
 FRAME_ADPCM = 512
-SEND_INTERVAL = 0.016
+SEND_INTERVAL = 0.06
 
 RECORD_DIR = "recordings"
-REPLY_WAV = "chặnkhjkhg-phải-tình-đầu-sao-đau-đến-thế.wav"   # <-- BẠN ĐỔI FILE NÀY
+REPLY_WAV = "chẳng-phải-tình-đầu-sao-đau-đến-thế.wav"   # <-- BẠN ĐỔI FILE NÀY
 
 os.makedirs(RECORD_DIR, exist_ok=True)
 
@@ -170,7 +170,7 @@ def save_wav(chunks):
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(b"".join(chunks))
+        wf.writeframes(b"".join(chunks))    
     return path
 
 async def send_wav(ws, path):
@@ -179,18 +179,22 @@ async def send_wav(ws, path):
     await ws.send_text("SPEAK_START")
 
     tx_state = None
-
     with wave.open(path, "rb") as wf:
         while True:
-            pcm = wf.readframes(256)
+            # Đọc 1024 mẫu (tương đương 2048 bytes PCM)
+            # 1024 mẫu nén ADPCM (4-bit) sẽ ra ĐÚNG 512 bytes
+            pcm = wf.readframes(1024) 
             if not pcm:
                 break
 
             adpcm, tx_state = adpcm_encode(pcm, tx_state)
-            adpcm = adpcm.ljust(FRAME_ADPCM, b'\x00')
-
+            
+            # XÓA DÒNG NÀY: adpcm = adpcm.ljust(FRAME_ADPCM, b'\x00')
+            # Gửi trực tiếp adpcm (lúc này đã đủ 512 bytes)
             await ws.send_bytes(adpcm)
-            await asyncio.sleep(SEND_INTERVAL)
+            
+            # Quan trọng: 1024 mẫu ở 16kHz chiếm 64ms thời gian thực
+            await asyncio.sleep(0.064) 
 
     await ws.send_text("TTS_END")
     log("🏁", "Playback done")
