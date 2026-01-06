@@ -482,6 +482,16 @@ void AppController::processQueue()
                 switch (msg.app_event)
                 {
                 case event::AppEvent::USER_BUTTON:
+                    // check ws is online
+                    if (network)
+                    {
+                        auto conn_state = StateManager::instance().getConnectivityState();
+                        if (conn_state != state::ConnectivityState::ONLINE)
+                        {
+                            ESP_LOGW(TAG, "Ignoring button press - not online");
+                            break;
+                        }
+                    }
                     ESP_LOGI(TAG, "Button Pressed -> Start Listening");
                     // Chuyển thẳng sang LISTENING (hoặc TRIGGERED nếu muốn có tiếng Beep trước)
                     StateManager::instance().setInteractionState(
@@ -516,6 +526,15 @@ void AppController::processQueue()
                     wake();
                     break;
                 case event::AppEvent::RELEASE_BUTTON:
+                    if (network)
+                    {
+                        auto conn_state = StateManager::instance().getConnectivityState();
+                        if (conn_state != state::ConnectivityState::ONLINE)
+                        {
+                            ESP_LOGW(TAG, "Ignoring button release - not online");
+                            break;
+                        }
+                    }
                     StateManager::instance().setInteractionState(
                         state::InteractionState::IDLE,
                         state::InputSource::BUTTON);
