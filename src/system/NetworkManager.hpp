@@ -180,7 +180,7 @@ private:
     // ======================================================
     std::unique_ptr<WifiService> wifi;
     std::unique_ptr<WebSocketClient> ws;
-        // Bluetooth service for BLE config mode
+    // Bluetooth service for BLE config mode
     std::shared_ptr<BluetoothService> ble_service;
 
     // ======================================================

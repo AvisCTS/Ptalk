@@ -184,7 +184,10 @@ void NetworkManager::update(uint32_t dt_ms)
         return;
 
     tick_ms += dt_ms;
-
+    if (ws_running && !ws->isConnected())
+    {
+        ws->close();
+    }
     // --------------------------------------------------------------------
     // Retry WebSocket nếu WiFi đã kết nối
     // --------------------------------------------------------------------
@@ -394,25 +397,17 @@ void NetworkManager::handleWsStatus(int status)
     switch (status)
     {
     case 0: // CLOSED
-        if (ws_immune_mode)
-        {
-            ESP_LOGW(TAG, "WS → CLOSED during immune mode - forcing cleanup");
-            // Server disconnect is FATAL - must cleanup even during audio
-            ws_immune_mode = false; // Disable immune mode to allow cleanup
-        }
-
         ESP_LOGW(TAG, "WS → CLOSED");
+
         ws_running = false;
 
-        // Notify disconnect callback to flush audio buffer
         if (on_disconnect_cb)
-        {
             on_disconnect_cb();
-        }
 
-        if (ws_should_run)
+        if (wifi_ready)
         {
-            ws_retry_timer = 1500; // retry nhẹ nhàng
+            ws_should_run = true;
+            ws_retry_timer = 1500;
             publishState(state::ConnectivityState::CONNECTING_WS);
         }
         else
@@ -429,6 +424,7 @@ void NetworkManager::handleWsStatus(int status)
     case 2: // OPEN
         ESP_LOGI(TAG, "WS → OPEN");
         ws_running = true;
+
         publishState(state::ConnectivityState::ONLINE);
         // 1. Lấy thông tin
         std::string device_id = getDeviceMacID();

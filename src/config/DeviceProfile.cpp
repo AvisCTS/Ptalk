@@ -407,9 +407,9 @@ bool DeviceProfile::setup(AppController &app)
     net_cfg.ap_max_clients = 4;       // Số thiết bị tối đa kết nối vào portal
 
     // Đặt địa chỉ IP và port của WebSocket server (ví dụ: 192.168.1.100:8080)
-    // Thêm path nếu server yêu cầu, ví dụ: ws://13.239.36.114:8000/ws
+    // Thêm path nếu server yêu cầu, ví dụ: ws://171.226.10.121:8000/ws
     // Uvicorn/FastAPI thường khai báo endpoint WebSocket tại "/ws".
-    net_cfg.ws_url = "ws://10.13.136.231:8000/ws";
+    net_cfg.ws_url = "ws://171.226.10.121:8000/ws";
 
     if (!network_mgr->init(net_cfg))
     {
@@ -478,9 +478,9 @@ bool DeviceProfile::setup(AppController &app)
         if (msg == "PROCESSING_START" || msg == "PROCESSING") {
             sm.setInteractionState(state::InteractionState::PROCESSING,
                                    state::InputSource::SERVER_COMMAND);
-        } else if (msg == "LISTENING") {
-            sm.setInteractionState(state::InteractionState::LISTENING,
-                                   state::InputSource::SERVER_COMMAND);
+        // } else if (msg == "LISTENING") {
+        //     sm.setInteractionState(state::InteractionState::LISTENING,
+        //                            state::InputSource::SERVER_COMMAND);
         } else if (msg == "SPEAKING" || msg == "SPEAK_START") {
             sm.setInteractionState(state::InteractionState::SPEAKING,
                                    state::InputSource::SERVER_COMMAND);
