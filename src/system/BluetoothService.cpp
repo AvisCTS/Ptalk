@@ -1,6 +1,9 @@
 #include "BluetoothService.hpp"
 #include "esp_log.h"
 #include <cstring>
+#include <algorithm>
+#include <set>
+#include "WifiService.hpp"
 
 static const char *TAG = "BT_SVC";
 
@@ -41,16 +44,27 @@ bool BluetoothService::init(const std::string &adv_name, const std::vector<WifiI
 
     device_id_str_ = getDeviceEfuseID();
 
-    // Lưu cached networks từ NetworkManager
+    // Prepare Wi‑Fi list sorted by RSSI and deduplicated by SSID
     {
-        // Chuyển danh sách mạng đã quét sang dạng JSON
-        wifi_list_json_ = "";
-        for (auto &net : cached_networks)
+        wifi_networks_ = cached_networks;
+        std::sort(wifi_networks_.begin(), wifi_networks_.end(),
+                  [](const WifiInfo &a, const WifiInfo &b) { return a.rssi > b.rssi; });
+        
+        // Drop empty SSIDs and duplicates
+        std::vector<WifiInfo> cleaned;
+        std::set<std::string> seen;
+        for (auto &net : wifi_networks_)
         {
-            wifi_list_json_ += net.ssid + "," + std::to_string(net.rssi) + "|";
+            if (!net.ssid.empty() && seen.find(net.ssid) == seen.end())
+            {
+                cleaned.push_back(net);
+                seen.insert(net.ssid);
+            }
         }
-        if (!wifi_list_json_.empty())
-            wifi_list_json_.pop_back(); // Bỏ dấu | cuối
+        wifi_networks_ = cleaned;
+        wifi_read_index_ = 0;
+        
+        ESP_LOGI(TAG, "WiFi list prepared: %d networks", wifi_networks_.size());
     }
     s_bt_initialized = true;
     return true;
@@ -105,7 +119,7 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
 
     case ESP_GATTS_CREATE_EVT:
     {
-        s_instance->gatts_if_ = gatts_if; // Lưu interface ID
+        s_instance->gatts_if_ = gatts_if; // Cache interface ID from registration event
         s_instance->service_handle_ = param->create.service_handle;
         esp_ble_gatts_start_service(s_instance->service_handle_);
 
@@ -134,8 +148,21 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
     case ESP_GATTS_ADD_CHAR_EVT:
     {
         static int char_idx = 0;
-        if (char_idx < 8)
+        if (char_idx < 10)
             s_instance->char_handles[char_idx++] = param->add_char.attr_handle;
+        break;
+    }
+
+    case ESP_GATTS_MTU_EVT:
+    {
+        s_instance->mtu_size_ = param->mtu.mtu;
+        ESP_LOGI(TAG, "MTU exchanged: %d bytes", param->mtu.mtu);
+        
+        // Regenerate Wi‑Fi list to respect the new MTU
+        if (!s_instance->wifi_networks_.empty())
+        {
+            s_instance->buildWiFiListJSON();
+        }
         break;
     }
 
@@ -180,7 +207,6 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
 
     if (param->write.need_rsp)
     {
-        // Đã sửa lỗi: truyền gatts_if_ thay vì NULL
         esp_ble_gatts_send_response(gatts_if_, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, NULL);
     }
 }
@@ -189,8 +215,26 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
 {
     esp_gatt_rsp_t rsp = {};
     rsp.attr_value.handle = param->read.handle;
-    // UUID CHT_UUID_APP_VERSION
-    if (param->read.handle == char_handles[5])
+    // UUID DEVICE_NAME
+    if (param->read.handle == char_handles[0])
+    {
+        rsp.attr_value.len = temp_cfg_.device_name.length();
+        memcpy(rsp.attr_value.value, temp_cfg_.device_name.c_str(), rsp.attr_value.len);
+    }
+    // UUID VOLUME
+    else if (param->read.handle == char_handles[1])
+    {
+        rsp.attr_value.len = 1;
+        rsp.attr_value.value[0] = temp_cfg_.volume;
+    }
+    // UUID BRIGHTNESS
+    else if (param->read.handle == char_handles[2])
+    {
+        rsp.attr_value.len = 1;
+        rsp.attr_value.value[0] = temp_cfg_.brightness;
+    }
+    // UUID CHR_UUID_APP_VERSION
+    else if (param->read.handle == char_handles[5])
     {
         rsp.attr_value.len = strlen(app_meta::APP_VERSION);
         memcpy(rsp.attr_value.value, app_meta::APP_VERSION, rsp.attr_value.len);
@@ -202,9 +246,39 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
         rsp.attr_value.len = info.length();
         memcpy(rsp.attr_value.value, info.c_str(), rsp.attr_value.len);
     }
+
+    else if (param->read.handle == char_handles[8])
+    {
+        rsp.attr_value.len = device_id_str_.length();
+        memcpy(rsp.attr_value.value, device_id_str_.c_str(), rsp.attr_value.len);
+    }
+    else if (param->read.handle == char_handles[9])
+    {
+        // Send Wi‑Fi list JSON (MTU will truncate if oversized)
+        size_t len = std::min<size_t>(wifi_list_json_.length(), 512);
+        rsp.attr_value.len = len;
+        memcpy(rsp.attr_value.value, wifi_list_json_.c_str(), len);
+        ESP_LOGI(TAG, "WiFi list sent: %d/%d bytes", len, (int)wifi_list_json_.length());
+    }
     
 
     esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, ESP_GATT_OK, &rsp);
+}
+
+void BluetoothService::buildWiFiListJSON()
+{
+    // Format: ["SSID1:-49","SSID2:-61","SSID3:-75"] (JSON array for easy parsing)
+    wifi_list_json_ = "[";
+    
+    for (size_t i = 0; i < wifi_networks_.size(); i++)
+    {
+        if (i > 0)
+            wifi_list_json_ += ",";
+        wifi_list_json_ += "\"" + wifi_networks_[i].ssid + ":" + std::to_string(wifi_networks_[i].rssi) + "\"";
+    }
+    
+    wifi_list_json_ += "]";
+    ESP_LOGI(TAG, "WiFi list JSON: %s (%d bytes)", wifi_list_json_.c_str(), (int)wifi_list_json_.length());
 }
 
 void BluetoothService::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {}

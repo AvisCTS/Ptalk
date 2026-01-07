@@ -76,7 +76,7 @@ bool NetworkManager::init()
     ws->onBinary([this](const uint8_t *data, size_t len)
                  { this->handleWsBinaryMessage(data, len); });
 
-    // Đăng ký nhận thông báo trạng thái
+    // Subscribe to interaction state updates
     sub_interaction_id = StateManager::instance().subscribeInteraction(
         [this](state::InteractionState s, state::InputSource src)
         {
@@ -189,7 +189,7 @@ void NetworkManager::update(uint32_t dt_ms)
         ws->close();
     }
     // --------------------------------------------------------------------
-    // Retry WebSocket nếu WiFi đã kết nối
+    // Retry WebSocket when Wi‑Fi is connected
     // --------------------------------------------------------------------
     if (ws_should_run && !ws_running)
     {
@@ -426,16 +426,15 @@ void NetworkManager::handleWsStatus(int status)
         ws_running = true;
 
         publishState(state::ConnectivityState::ONLINE);
-        // 1. Lấy thông tin
+        // 1. Gather identity info
         std::string device_id = getDeviceEfuseID();
-        std::string app_version = app_meta::APP_VERSION; // Thay bằng version thực tế của bạn
+        std::string app_version = app_meta::APP_VERSION;
 
-        // 2. Tạo nội dung tin nhắn (Dạng JSON để server dễ đọc)
-        // Ví dụ: {"type":"identify", "device_id":"ABCDEF123456", "version":"1.0.2"}
+        // 2. Build JSON identity message for the server
         std::string identity_msg = "{\"type\":\"identify\", \"device_id\":\"" + device_id +
                                    "\", \"version\":\"" + app_version + "\"}";
 
-        // 3. Gửi lên Server
+        // 3. Send to server
         sendText(identity_msg);
 
         ESP_LOGI(TAG, "Identified to server: ID=%s, Ver=%s", device_id.c_str(), app_version.c_str());
@@ -489,7 +488,7 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
     }
 }
 
-// Task loop gửi dữ liệu lên Server
+// Task loop sending microphone data to server
 void NetworkManager::uplinkTaskLoop()
 {
     const size_t SEND_SIZE = 512;
@@ -503,12 +502,11 @@ void NetworkManager::uplinkTaskLoop()
         if (!ws_running)
             break;
 
-        // Nếu hết listening và buffer trống thì thoát
+        // Exit when not listening and buffer is empty
         if (!is_listening && xStreamBufferIsEmpty(mic_encoded_sb) && acc == 0)
             break;
 
-        // Đọc dữ liệu: Chờ tối đa 100ms để gom đủ dữ liệu
-        // Việc Block ở đây không hề tốn CPU, giúp Task khác (Display) chạy thoải mái
+        // Read data, waiting up to 100ms to batch enough bytes (non-busy wait)
         size_t want = SEND_SIZE - acc;
         size_t got = xStreamBufferReceive(mic_encoded_sb, send_buf + acc, want, pdMS_TO_TICKS(100));
 
@@ -517,7 +515,7 @@ void NetworkManager::uplinkTaskLoop()
             acc += got;
         }
 
-        // Khi đủ 512 bytes thì gửi ngay lập tức
+        // Send immediately when 512 bytes are ready
         if (acc == SEND_SIZE)
         {
             ws->sendBinary(send_buf, SEND_SIZE);
@@ -525,7 +523,7 @@ void NetworkManager::uplinkTaskLoop()
             // Không vTaskDelay ở đây để có thể gửi liên tiếp nếu buffer đang đầy
         }
 
-        // Đoạn vét buffer cuối cùng khi ngừng thu âm
+        // Flush remaining buffer once capture stops
         if (!is_listening && acc > 0 && xStreamBufferIsEmpty(mic_encoded_sb))
         {
             memset(send_buf + acc, 0, SEND_SIZE - acc);
@@ -545,11 +543,11 @@ void NetworkManager::uplinkTaskLoop()
 
 void NetworkManager::uplinkTaskEntry(void *arg)
 {
-    // Ép kiểu void* ngược lại thành con trỏ đối tượng
+    // Cast back to instance pointer
     auto *self = static_cast<NetworkManager *>(arg);
     if (self)
     {
-        self->uplinkTaskLoop(); // Gọi hàm loop thực sự (hàm này không cần static)
+        self->uplinkTaskLoop(); // Run loop (non-static)
     }
 }
 
@@ -724,29 +722,33 @@ void NetworkManager::retryWifiThenBLE()
 
     ESP_LOGW(TAG, "WiFi unavailable after retry - switching to BLE config mode");
 
-    // 1. Dừng WiFi (quan trọng)
+    // 1. Scan networks FIRST (while WiFi is still running)
     if (wifi)
     {
-        wifi->disconnect();
-        vTaskDelay(pdMS_TO_TICKS(500));
-
         wifi->ensureStaStarted();
         vTaskDelay(pdMS_TO_TICKS(100));
 
-        // Scan and cache networks before opening portal
         cached_networks = wifi->scanNetworks();
         ESP_LOGI(TAG, "Scanned and cached %d networks before BLE mode", cached_networks.size());
     }
 
-    // TODO: nếu cần esp_wifi_deinit() để giải phóng RF cho BLE thì xử lý ở đây
+    // 2. Now STOP WiFi completely to free RF for BLE
+    if (wifi)
+    {
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        
+        // Properly stop WiFi before deinit
+        esp_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        
+        esp_wifi_deinit();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        
+        ESP_LOGI(TAG, "WiFi fully stopped and deinitialized for BLE");
+    }
 
-    // 2. Bật BLE
-    //    if (ble_service) {
-    //         ble_service->init(config_.ap_ssid); // Dùng tên PTalk làm tên Bluetooth
-    //         ble_service->start();
-    //     }
-
-    // 3. Publish state
+    // 3. Publish state (BLE will be started later when RAM is freed)
     publishState(state::ConnectivityState::CONFIG_BLE);
 
     wifi_retry_task = nullptr;
@@ -758,7 +760,8 @@ void NetworkManager::startBLEConfigMode()
     if (ble_service)
     {
         ESP_LOGW(TAG, "Start BLE Config Mode now (RAM should be free)");
-        ble_service->init(config_.ap_ssid);
+        ESP_LOGI(TAG, "Passing %d cached networks to BLE service", cached_networks.size());
+        ble_service->init(config_.ap_ssid, cached_networks);
         ble_service->start();
     }
 }

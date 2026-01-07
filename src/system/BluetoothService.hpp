@@ -12,10 +12,9 @@
 #include "esp_gatt_common_api.h"
 #include "Version.hpp"
 
-struct WifiInfo {
-    std::string ssid;
-    int rssi = -99;
-};
+struct WifiInfo;
+
+// BLE GATT service used to provision basic device settings and Wi‑Fi credentials.
 class BluetoothService
 {
 public:
@@ -33,11 +32,16 @@ public:
     BluetoothService();
     ~BluetoothService();
 
+    // Initialize BLE stack, cache networks for listing, and prepare GATT service; returns false on init failure.
     bool init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks = {});
+
+    // Begin BLE advertising with the configured name; no-op if already started.
     bool start();
+
+    // Stop advertising and keep configuration state intact.
     void stop();
 
-    // Đã sửa lỗi: trỏ đúng vào config_cb_ (có dấu gạch dưới)
+    // Register callback triggered when the client sends the save command.
     void onConfigComplete(OnConfigComplete cb) { config_cb_ = cb; }
 
     static constexpr uint16_t SVC_UUID_CONFIG = 0xFF01;
@@ -54,23 +58,36 @@ public:
 
 private:
     static BluetoothService *s_instance;
+
+    // GAP callback entrypoint; handles advertising events only.
     static void gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+
+    // GATT server callback entrypoint; dispatches create/add/read/write/MTU events.
     static void gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
 
+    // Process characteristic writes to build temporary config and trigger save.
     void handleWrite(esp_ble_gatts_cb_param_t *param);
+
+    // Serve characteristic reads with the latest config, version, and Wi‑Fi list.
     void handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t gatts_if);
+
+    // Serialize Wi‑Fi scan results into a compact JSON array string.
+    void buildWiFiListJSON();
 
 private:
     std::string adv_name_;
     bool started_ = false;
-    esp_gatt_if_t gatts_if_ = 0; // Lưu interface ID
+    esp_gatt_if_t gatts_if_ = 0; // Stores GATT interface assigned at service creation
     uint16_t conn_id_ = 0xFFFF;
     uint16_t service_handle_ = 0;
-    uint16_t char_handles[8] = {0}; // Lưu handle của 8 đặc tính
+    uint16_t char_handles[10] = {0}; // Handles for the 10 characteristics
 
     ConfigData temp_cfg_;
     OnConfigComplete config_cb_ = nullptr;
 
     std::string wifi_list_json_;
     std::string device_id_str_;
+    std::vector<WifiInfo> wifi_networks_;  // Cached networks announced over BLE
+    size_t wifi_read_index_ = 0;           // Streaming cursor for Wi‑Fi list reads
+    uint16_t mtu_size_ = 23;               // Current BLE MTU (default 23, up to ~512)
 };

@@ -16,20 +16,9 @@
 class WifiService;     // Low-level WiFi
 class WebSocketClient; // Low-level WebSocket
 struct WifiInfo;
-/**
- * NetworkManager
- * -------------------------------------------------------------------
- * Nhiệm vụ:
- *  - Điều phối WiFi → WebSocket
- *  - Publish ConnectivityState lên StateManager
- *  - Cầu nối WebSocket ↔ AppController (nhận text/binary message)
- *  - Quyết định retry logic của WebSocket (không để trong WS driver)
- *
- * Không làm:
- *  - Không scan wifi
- *  - Không xử lý portal HTML
- *  - Không chứa logic kết nối driver-level
- */
+// NetworkManager coordinates Wi‑Fi and WebSocket, publishes connectivity state,
+// and bridges WS messages to the app. It owns retry logic; Wi‑Fi scanning/portal
+// and driver-level connection details stay in WifiService.
 class NetworkManager
 {
 public:
@@ -56,20 +45,26 @@ public:
     // ======================================================
     // INIT / START / STOP
     // ======================================================
+    // Initialize Wi‑Fi and WebSocket services; returns false on allocation failure.
     bool init();
     // Init with configuration (preferred)
+    // Initialize using provided config; returns false on failure.
     bool init(const Config &cfg);
+
+    // Start Wi‑Fi connection workflow and WS task; no-op if already started.
     void start();
+
+    // Stop WS, Wi‑Fi, and internal tasks.
     void stop();
 
     // ======================================================
     // External API
     // ======================================================
 
-    /// Cập nhật mỗi chu kỳ AppController loop
+    // Tick the manager (used by internal task); dt_ms is elapsed milliseconds.
     void update(uint32_t dt_ms);
 
-    /// Gán lại credentials khi user submit portal
+    // Update credentials when user submits portal form.
     void setCredentials(const std::string &ssid, const std::string &pass);
 
     // Runtime config setters (optional, can be used before start)
@@ -80,55 +75,46 @@ public:
     // Set mic encoded stream buffer (for uplink audio task)
     void setMicBuffer(StreamBufferHandle_t sb) { mic_encoded_sb = sb; }
 
-    /// Gửi message lên server
+    // Send text message to server; returns false if WS not running.
     bool sendText(const std::string &text);
+    // Send binary message to server; returns false if WS not running.
     bool sendBinary(const uint8_t *data, size_t len);
 
-    /// Callback khi server gửi text message
+    // Register callback for incoming WS text.
     void onServerText(std::function<void(const std::string &)> cb);
 
-    /// Callback khi server gửi binary
+    // Register callback for incoming WS binary.
     void onServerBinary(std::function<void(const uint8_t *, size_t)> cb);
 
-    /// Callback khi WebSocket disconnect (để flush buffer/reset state)
+    // Register callback on WS disconnect (to flush buffers/reset state).
     void onDisconnect(std::function<void()> cb);
 
-    /// Set WS immune mode - when true, prevents WS from closing on WiFi fluctuations
-    /// Use during critical operations like audio streaming
+    // When true, keep WS alive across minor Wi‑Fi drops (e.g., during audio streaming).
     void setWSImmuneMode(bool immune);
 
-    /// Set BluetoothService instance for BLE config mode
+    // Set BluetoothService for BLE config mode handoff.
     void setBluetoothService(std::shared_ptr<BluetoothService> ble) { ble_service = ble; }
 
-    /// Check if currently in active speaking session
+    // Check if a speaking session is active (prevents SPEAKING spam).
     bool isSpeakingSessionActive() const { return speaking_session_active; }
 
-    /// Mark start of speaking session (prevents SPEAKING state spam)
+    // Mark start of speaking session (debounces SPEAKING state).
     void startSpeakingSession() { speaking_session_active = true; }
 
-    /// Mark end of speaking session (allows next TTS to trigger SPEAKING)
+    // Mark end of speaking session (allows next TTS to trigger SPEAKING).
     void endSpeakingSession() { speaking_session_active = false; }
 
     // ======================================================
     // OTA Firmware Update Support
     // ======================================================
-    /**
-     * Request firmware update from server
-     * Server should respond with binary firmware data
-     * @param version Version to request (optional, "" = latest)
-     * @return true if request sent
-     */
+    // Request firmware update; server should respond with binary firmware stream.
+    // Optional version selects target; empty string requests latest. Returns false if WS not connected.
     bool requestFirmwareUpdate(const std::string &version = "");
 
-    /**
-     * Callback when firmware data chunk received from server
-     * Used internally during OTA download
-     */
+    // Register callback for incoming firmware data chunks during OTA.
     void onFirmwareChunk(std::function<void(const uint8_t *, size_t)> cb);
 
-    /**
-     * Callback when firmware download completes
-     */
+    // Register callback for firmware download completion (success flag, message).
     void onFirmwareComplete(std::function<void(bool success, const std::string &msg)> cb);
 
     // Control captive portal explicitly
@@ -147,7 +133,10 @@ private:
     // ======================================================
     // Internal handlers
     // ======================================================
+    // React to Wi‑Fi status changes from WifiService.
     void handleWifiStatus(int status_code);
+
+    // React to WebSocket status changes from WebSocketClient.
     void handleWsStatus(int status_code);
 
     // Retry logic for initial WiFi connection
@@ -156,7 +145,10 @@ private:
     static void retryWifiTaskEntry(void *arg);
 
     // Receive message from WebSocketClient
+    // Handle inbound WS text and dispatch to callbacks/state updates.
     void handleWsTextMessage(const std::string &msg);
+
+    // Handle inbound WS binary payloads (firmware or app data).
     void handleWsBinaryMessage(const uint8_t *data, size_t len);
 
     // Uplink task for sending microphone data
@@ -164,6 +156,7 @@ private:
     static void uplinkTaskEntry(void *arg);
     // Push connectivity state lên StateManager
     void publishState(state::ConnectivityState s);
+    // Start/stop uplink task based on interaction state.
     void handleInteractionState(state::InteractionState s);
 
     static void taskEntry(void *arg);
