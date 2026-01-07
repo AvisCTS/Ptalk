@@ -15,7 +15,7 @@
 
 class WifiService;     // Low-level WiFi
 class WebSocketClient; // Low-level WebSocket
-
+struct WifiInfo;
 /**
  * NetworkManager
  * -------------------------------------------------------------------
@@ -196,6 +196,7 @@ private:
     // WiFi status flags
     bool wifi_ready = false; // đã có IP hay chưa
 
+    std::vector<WifiInfo> cached_networks; // Cached WiFi scan results
 
     // WS runtime control
     bool ws_should_run = false;           // Manager muốn WS chạy

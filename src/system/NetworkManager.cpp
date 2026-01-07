@@ -427,7 +427,7 @@ void NetworkManager::handleWsStatus(int status)
 
         publishState(state::ConnectivityState::ONLINE);
         // 1. Lấy thông tin
-        std::string device_id = getDeviceMacID();
+        std::string device_id = getDeviceEfuseID();
         std::string app_version = app_meta::APP_VERSION; // Thay bằng version thực tế của bạn
 
         // 2. Tạo nội dung tin nhắn (Dạng JSON để server dễ đọc)
@@ -729,6 +729,13 @@ void NetworkManager::retryWifiThenBLE()
     {
         wifi->disconnect();
         vTaskDelay(pdMS_TO_TICKS(500));
+
+        wifi->ensureStaStarted();
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+        // Scan and cache networks before opening portal
+        cached_networks = wifi->scanNetworks();
+        ESP_LOGI(TAG, "Scanned and cached %d networks before BLE mode", cached_networks.size());
     }
 
     // TODO: nếu cần esp_wifi_deinit() để giải phóng RF cho BLE thì xử lý ở đây
