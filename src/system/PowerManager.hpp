@@ -9,6 +9,8 @@
 class Power;
 class DisplayManager;
 
+// Monitors battery voltage/percent, smooths readings, infers power state, and
+// publishes changes to StateManager; optionally updates DisplayManager with %.
 class PowerManager {
 public:
     struct Config {
@@ -23,8 +25,13 @@ public:
     PowerManager(std::unique_ptr<Power> power, const Config& cfg);
     ~PowerManager();
 
+    // Initialize sampling timer and validate driver presence.
     bool init();
+
+    // Start periodic evaluation timer.
     void start();
+
+    // Stop periodic evaluation timer.
     void stop();
 
     // === UI Query API ===
@@ -36,10 +43,10 @@ public:
     bool isFull() const { return ui_full; }
     bool isBatteryPresent() const { return battery_present; }
 
-    // Force an immediate power evaluation (runs one sample now)
+    // Force an immediate power evaluation (runs one sample now).
     void sampleNow();
 
-    // Link DisplayManager for battery % updates
+    // Link DisplayManager for battery % updates.
     void setDisplayManager(DisplayManager* display) { display_mgr = display; }
 
 private:

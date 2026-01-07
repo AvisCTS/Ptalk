@@ -1,7 +1,7 @@
 #include "PowerManager.hpp"
 #include "DisplayManager.hpp"
 #include "AppController.hpp"
-#include "../../lib/power/Power.hpp"        // driver của bạn
+#include "../../lib/power/Power.hpp"        // Power driver implementation
 #include "esp_log.h"
 
 static const char* TAG = "PowerManager";

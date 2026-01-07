@@ -35,24 +35,9 @@ class TouchInput;     // Buttons or Touch Sensor
 class OTAUpdater;     // Firmware update
 // class ConfigManager;       // Configuration, NVS
 
-/**
- * Class: AppController
- * Author: Trung Nguyen
- * Email: Trung.nt20271@gmail.com
- * Date: 10 Dec 2025
- *
- * Description:
- * - Trung tâm điều phối ứng dụng chính
- * - Quản lý vòng lặp chính, nhận sự kiện từ các module
- * - Cập nhật trạng thái hệ thống qua StateManager
- * - Xử lý các sự kiện ứng dụng (AppEvent)
- * - Điều phối các module: NetworkManager, AudioManager, DisplayManager, PowerManager, TouchInput, OTAUpdater
- * - Cung cấp API bên ngoài để khởi động, tắt, reset, sleep, wake, reboot
- * - Được thiết kế theo mô hình singleton để đảm bảo chỉ có một instance duy nhất
- * - Sử dụng hàng đợi FreeRTOS để xử lý bất đồng bộ các sự kiện
- * - Đăng ký callback với StateManager để phản hồi thay đổi trạng thái
- * - Được khởi tạo và cấu hình thông qua dependency injection của các module con
- */
+// AppController is the central orchestrator: it owns the main task/queue,
+// routes state changes via StateManager, handles AppEvents, and starts/stops
+// Network/Audio/Display/Power/Touch/OTA modules. Singleton-managed.
 class AppController {
 public:
     struct Config {
@@ -63,26 +48,13 @@ public:
     static AppController &instance();
 
     // ======= Lifecycle (consistent with all managers) =======
-    /**
-     * Initialize AppController:
-     * - Create message queue
-     * - Subscribe to StateManager for state changes
-     * Must be called before start()
-     * @return true if successful
-     */
+    // Initialize controller: create queue and subscribe to StateManager; call before start().
     bool init();
 
-    /**
-     * Start AppController task and dependent managers.
-     * Startup order: PowerManager → DisplayManager → NetworkManager
-     * Note: Call init() first
-     */
+    // Start controller task then dependent managers (Power → Display → Network → Audio → Touch).
     void start();
 
-    /**
-     * Stop AppController and all managers (reverse shutdown order).
-     * Safe to call multiple times.
-     */
+    // Stop controller and all managers in reverse order; safe to call multiple times.
     void stop();
 
     // ======= External Actions =======
@@ -91,17 +63,15 @@ public:
     void wake();
     void factoryReset();
 
-    // Configure app-level parameters (e.g., deep sleep wake interval)
+    // Configure app-level parameters (e.g., deep sleep wake interval).
     void setConfig(const Config& cfg);
 
     // ======= Post application-level event to queue =======
-    /**
-     * Post an application event to the internal queue
-     * @param evt Event to post
-     */
+    // Post an application event to the internal queue.
     void postEvent(event::AppEvent evt);
 
     // ======= Dependency injection =======
+    // Attach owned module instances before init/start.
     void attachModules(std::unique_ptr<DisplayManager> displayIn,
                        std::unique_ptr<AudioManager> audioIn,
                        std::unique_ptr<NetworkManager> networkIn,
@@ -113,8 +83,7 @@ public:
     DisplayManager* getDisplay() const { return display.get(); }
 
     // ======= Emotion helpers =======
-    /// Parse emotion code from WebSocket message ("01" → HAPPY, "11" → SAD, etc.)
-    /// Returns NEUTRAL if code not recognized
+    // Parse emotion code from WebSocket message ("01" → HAPPY, "11" → SAD, etc.). Returns NEUTRAL if unknown.
     static state::EmotionState parseEmotionCode(const std::string& code);
 
 private:

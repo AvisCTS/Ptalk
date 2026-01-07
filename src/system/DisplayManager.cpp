@@ -532,7 +532,7 @@ void DisplayManager::playIcon(const std::string &name,
                               int y)
 {
 
-    // Các icon thường (cao 22), hiển thị cùng hàng với % pin (top-right)
+    // Small icons (height ~22) typically shown near the battery percentage row
     auto it = icons.find(name);
     if (it == icons.end())
     {

@@ -3,20 +3,9 @@
 #include <functional>
 #include "esp_ota_ops.h"
 
-/**
- * Class:   OTAUpdater
- * Author:  Trung Nguyen
- * Email:   Trung.nt20217@gmail.com
- * Date:    17 Dec 2025
- * 
- * Description:
- * - Quản lý cập nhật firmware qua OTA
- * - Viết dữ liệu firmware vào partition OTA
- * - Kiểm tra và xác thực firmware
- * - Cung cấp callback tiến trình cập nhật
- * - Được điều khiển bởi AppController
- * - Không xử lý tải firmware từ mạng (NetworkManager làm việc đó)
- */
+// OTAUpdater manages firmware update writes to the OTA partition, validates
+// the image, and reports progress. AppController orchestrates it; downloading
+// firmware remains in NetworkManager.
 class OTAUpdater {
 public:
     OTAUpdater() = default;
@@ -29,63 +18,42 @@ public:
     OTAUpdater& operator=(OTAUpdater&&) = default;
 
     // ======= Lifecycle =======
+    // Initialize OTA subsystem; currently a no-op placeholder.
     bool init();
+    // Mark start of OTA capability (no background threads here).
     void start();
+    // Mark stop of OTA capability (no cleanup needed currently).
     void stop();
 
     // ======= OTA Control =======
-    /**
-     * Begin OTA update with data buffer
-     * @param data Pointer to firmware data
-     * @param size Size of firmware data
-     * @return true if update started successfully
-     */
+    // Begin OTA update using the provided firmware buffer; returns false on invalid input or init failure.
     bool beginUpdate(const uint8_t* data, size_t size);
 
-    /**
-     * Write data chunk to OTA partition
-     * @param data Pointer to data chunk
-     * @param size Size of data chunk
-     * @return bytes written, -1 if error
-     */
+    // Write a data chunk to OTA partition; returns bytes written or -1 on error.
     int writeChunk(const uint8_t* data, size_t size);
 
-    /**
-     * Finish OTA update and validate
-     * @return true if update completed successfully
-     */
+    // Finish OTA update, validate, and set boot partition; returns false on failure.
     bool finishUpdate();
 
-    /**
-     * Abort OTA update and rollback
-     */
+    // Abort the ongoing OTA update and reset counters.
     void abortUpdate();
 
     // ======= Status =======
     bool isUpdating() const { return updating; }
     uint32_t getBytesWritten() const { return bytes_written; }
     uint32_t getTotalBytes() const { return total_bytes; }
-    /**
-     * Get current progress percentage (0-100)
-     * @return progress percentage, 0 if no update in progress
-     */
+    // Get current progress percentage (0-100); returns 0 if not updating.
     uint8_t getProgressPercent() const;
 
-    /**
-     * Check if enough storage space for firmware update
-     * @param firmware_size Size of firmware to update
-     * @return true if storage is sufficient
-     */
+    // Check if firmware size fits available OTA partition.
     bool checkStorageSpace(size_t firmware_size);
 
-    /**
-     * Get available free space in OTA partition
-     * @return free space in bytes
-     */
+    // Get available OTA partition size in bytes.
     uint32_t getAvailableSpace() const;
 
     // ======= Callbacks =======
     using ProgressCallback = std::function<void(uint32_t current, uint32_t total)>;
+    // Set progress callback invoked with bytes written/total.
     void setProgressCallback(ProgressCallback cb) { progress_callback = cb; }
 
 private:

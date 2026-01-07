@@ -24,7 +24,7 @@ struct AppMessage
         APP_EVENT
     } type;
 
-    // payloads (chỉ dùng field tương ứng với type)
+    // Payloads (use only the field matching the type)
     state::InteractionState interaction_state;
     state::InputSource interaction_source;
 
@@ -124,25 +124,9 @@ bool AppController::init()
     if (!ota)
         ESP_LOGW(TAG, "OTAUpdater not attached");
 
-    // ======================================================================
-    // SUBSCRIPTION ARCHITECTURE (Enterprise Pattern):
-    // ======================================================================
-    // AppController mediates state changes for CONTROL LOGIC only:
-    //   onInteractionStateChanged  → TRIGGERED→LISTENING transition, cancel logic
-    //   onConnectivityStateChanged → audio streaming enable/disable
-    //   onSystemStateChanged       → error handling, audio stop
-    //   onPowerStateChanged        → network/audio power down, sleep
-    //
-    // Other managers subscribe directly for their concerns:
-    //   DisplayManager   → Handles ALL UI (InteractionState, ConnectivityState, SystemState, PowerState)
-    //   AudioManager     → Handles audio state machine (InteractionState)
-    //   NetworkManager   → (no subscription; explicit method calls)
-    //
-    // Benefits:
-    // ✅ No cross-cutting concerns (UI logic stays in Display, audio in Audio)
-    // ✅ Deterministic: all notifications go through single queue
-    // ✅ Testable: mock StateManager and verify queue messages
-    // ======================================================================
+    // Subscription architecture: AppController mediates state changes for control logic.
+    // Other managers subscribe directly for UI/audio concerns. Benefits: avoids cross-cutting,
+    // deterministic routing via a single queue, and is testable with mocked StateManager.
 
     auto &sm = StateManager::instance();
 
@@ -231,7 +215,7 @@ void AppController::start()
 
     vTaskDelay(pdMS_TO_TICKS(10)); // Ensure task is running before modules start
 
-    // 2️⃣ Start PowerManager to monitor battery--
+    // 2️⃣ Start PowerManager to monitor battery
     if (power)
     {
         if (!power->init())
@@ -241,7 +225,7 @@ void AppController::start()
         else
         {
             power->start();
-            // Lấy mẫu ngay để biết trạng thái pin sớm
+            // Sample immediately to learn battery state early
             power->sampleNow();
 
             // Check if waking from deep sleep due to battery check
@@ -262,7 +246,7 @@ void AppController::start()
     }
 
     // ---------------------------------------------------------------------
-    // 3) Start DisplayManager để hiển thị trạng thái portal
+    // 3) Start DisplayManager to show portal/status
     // ---------------------------------------------------------------------
     if (display)
     {
@@ -273,7 +257,7 @@ void AppController::start()
     }
 
     // ---------------------------------------------------------------------
-    // 4) Start NetworkManager nếu pin không thấp/critical
+    // 4) Start NetworkManager if battery not critical
     // ---------------------------------------------------------------------
     if (network)
     {
@@ -288,7 +272,7 @@ void AppController::start()
         }
     }
     // ---------------------------------------------------------------------
-    // 5) Start AudioManager cuối cùng (cần network để stream)
+    // 5) Start AudioManager last (needs network for streaming)
     // ---------------------------------------------------------------------
     if (audio)
     {

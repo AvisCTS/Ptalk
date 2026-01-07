@@ -4,6 +4,8 @@
 #include <mutex>
 #include "StateTypes.hpp"
 
+// Central state hub providing thread-safe setters/getters and subscription
+// callbacks for interaction, connectivity, system, power, and emotion state.
 class StateManager {
 public:
     // New: callback type includes source
@@ -17,26 +19,42 @@ public:
     static StateManager& instance();
 
     // ---- Setters ----
+    // Update interaction state and source; notifies subscribers if changed.
     void setInteractionState(state::InteractionState s, state::InputSource src = state::InputSource::UNKNOWN);
+    // Update connectivity state; notifies subscribers if changed.
     void setConnectivityState(state::ConnectivityState s);
+    // Update system state; notifies subscribers if changed.
     void setSystemState(state::SystemState s);
+    // Update power state; notifies subscribers if changed.
     void setPowerState(state::PowerState s);
+    // Update emotion state; always notifies subscribers.
     void setEmotionState(state::EmotionState s);
 
     // ---- Getters ----
+    // Return latest interaction state.
     state::InteractionState getInteractionState();
+    // Return latest interaction source.
     state::InputSource getInteractionSource();
     
+    // Return latest connectivity state.
     state::ConnectivityState getConnectivityState();
+    // Return latest system state.
     state::SystemState getSystemState();
+    // Return latest power state.
     state::PowerState getPowerState();
+    // Return latest emotion state.
     state::EmotionState getEmotionState();
 
     // ---- Subscribe ----
+    // Subscribe to interaction changes; returns subscription id.
     int subscribeInteraction(InteractionCb cb);
+    // Subscribe to connectivity changes; returns subscription id.
     int subscribeConnectivity(ConnectivityCb cb);
+    // Subscribe to system changes; returns subscription id.
     int subscribeSystem(SystemCb cb);
+    // Subscribe to power changes; returns subscription id.
     int subscribePower(PowerCb cb);
+    // Subscribe to emotion changes; returns subscription id.
     int subscribeEmotion(EmotionCb cb);
 
     // ---- Unsubscribe ----

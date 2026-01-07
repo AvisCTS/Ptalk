@@ -11,14 +11,14 @@ namespace app_meta {
 }
 
 
-uint64_t getEfuseMac()
+inline uint64_t getEfuseMac()
 {
     uint64_t mac;
     esp_efuse_mac_get_default((uint8_t*)&mac);
     return mac;
 }
 
-std::string getDeviceEfuseID()
+inline std::string getDeviceEfuseID()
 {
     uint64_t mac = getEfuseMac();
 

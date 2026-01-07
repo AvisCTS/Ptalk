@@ -30,7 +30,7 @@ class AnimationPlayer;     // Multi-frame animation engine
 //
 // DisplayManager = UI Logic layer
 // ----------------------------------------------------------------------------
-// - Subscribe to StateManager (optional)
+// - Subscribes to StateManager when enabled
 // - AppController can also call UI API directly
 // - Handles emotion animation, icons, power-save mode
 // - Uses DisplayDriver for actual drawing
@@ -57,11 +57,10 @@ public:
     DisplayManager();
     ~DisplayManager();
 
-    // Initialize with low-level display driver
-    // Takes ownership of the low-level driver to ensure lifetime matches the UI
+    // Initialize with low-level display driver (takes ownership) and set dimensions.
     bool init(std::unique_ptr<DisplayDriver> driver, int width = 240, int height = 320);
 
-    // Real-time update (should be called every 20–50ms)
+    // Real-time update; call every 20-50ms with elapsed milliseconds.
     void update(uint32_t dt_ms);
 
     // Lifecycle (consistent with other managers)
@@ -79,45 +78,31 @@ public:
     }
     void stop() { stopLoop(); }
 
-    // Enable/Disable automatic UI updates from StateManager
+    // Enable or disable automatic UI updates via StateManager subscriptions.
     void enableStateBinding(bool enable);
 
     // Exposed controls
+    // Update battery percentage overlay (255 hides it).
     void setBatteryPercent(uint8_t p);
     
 
     // ======= OTA Update UI =======
-    /**
-     * Show OTA update screen
-     */
+    // Show OTA update screen and reset progress state.
     void showOTAUpdating();
 
-    /**
-     * Update OTA progress display
-     * @param current_percent Progress percentage (0-100)
-     */
+    // Update OTA progress display (0-100%).
     void setOTAProgress(uint8_t current_percent);
 
-    /**
-     * Show OTA status message
-     * @param status Status text (e.g., "Downloading...", "Writing...", "Validating...")
-     */
+    // Update OTA status message (e.g., "Downloading...", "Writing...").
     void setOTAStatus(const std::string& status);
 
-    /**
-     * Show OTA completed/success screen
-     */
+    // Show OTA completed/success screen.
     void showOTACompleted();
 
-    /**
-     * Show OTA error screen
-     * @param error_msg Error message
-     */
+    // Show OTA error screen with message.
     void showOTAError(const std::string& error_msg);
 
-    /**
-     * Show rebooting screen (after OTA success)
-     */
+    // Show rebooting screen (after OTA success).
     void showRebooting();
 
     // Power saving mode (stop animations)
@@ -128,27 +113,45 @@ public:
     void setBrightness(uint8_t percent);
 
     // --- Asset Registration ---------------------------------------------------
+    // Register an emotion animation by name (copied into registry).
     void registerEmotion(const std::string& name, const Animation1Bit& anim);
+
+    // Register an icon asset by name (copied into registry).
     void registerIcon(const std::string& name, const Icon& icon);
     
     // --- Asset Playback (for testing/direct control) ---
+    // Play a named emotion animation at coordinates (default centers animation).
     void playEmotion(const std::string& name, int x = 0, int y = 0);
+
+    // Render a text message (centers when x or y < 0); stops animation while active.
     void playText(const std::string& text,
                   int x = -1,
                   int y = -1,
                   uint16_t color = 0xFFFF,
                   int scale = 1);
+
+    // Clear any active text mode and resume animation.
     void clearText();
 
 private:
     // Internal handlers mapping state -> UI behavior
+    // Respond to interaction state changes (listening, thinking, etc.).
     void handleInteraction(state::InteractionState s, state::InputSource src);
+
+    // Respond to connectivity state changes (WiFi/BLE/online).
     void handleConnectivity(state::ConnectivityState s);
+
+    // Respond to system lifecycle state changes (booting, running, updating).
     void handleSystem(state::SystemState s);
+
+    // Respond to power state changes (charging, critical, etc.).
     void handlePower(state::PowerState s);
+
+    // Respond to emotion state changes to map to animations.
     void handleEmotion(state::EmotionState s);
 
     // Internal asset playback
+    // Render an icon with optional placement helper.
     void playIcon(const std::string& name,
                   IconPlacement placement = IconPlacement::Custom,
                   int x = 0, int y = 0);

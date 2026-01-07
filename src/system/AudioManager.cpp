@@ -183,7 +183,7 @@ void AudioManager::stop()
 bool AudioManager::allocateResources()
 {
     if (sb_mic_pcm != nullptr)
-        return true; // Đã cấp phát rồi
+        return true; // Already allocated
 
     ESP_LOGW(TAG, "Allocating Audio Stream Buffers...");
 
@@ -271,17 +271,17 @@ void AudioManager::startListening(state::InputSource src)
 
     ESP_LOGI(TAG, "Start listening (Interruption handled)");
 
-    // 1. Dừng ngay việc phát loa nếu đang nói
+    // Stop speaker immediately if mid-speech
     if (speaking)
     {
-        stopSpeaking(); // Hàm này sẽ gọi output->stopPlayback()
+        stopSpeaking(); // This calls output->stopPlayback()
     }
 
-    // 2. XÓA SẠCH các buffer âm thanh cũ của loa
-    xStreamBufferReset(sb_spk_encoded); // Xóa dữ liệu nén chưa kịp giải mã
-    xStreamBufferReset(sb_spk_pcm);     // Xóa dữ liệu PCM chưa kịp phát ra loa
+    // Clear speaker buffers to avoid playing stale audio
+    xStreamBufferReset(sb_spk_encoded); // Drop pending encoded frames
+    xStreamBufferReset(sb_spk_pcm);     // Drop pending PCM frames
 
-    // 3. Reset Codec để xóa bộ nhớ đệm của ADPCM (tránh tiếng nổ/rè cho câu sau)
+    // Reset codec to clear ADPCM predictor state for a clean session
     if (codec)
     {
         codec->reset();
@@ -291,8 +291,7 @@ void AudioManager::startListening(state::InputSource src)
     listening = true;
     speaking = false;
 
-    // 4. Bắt đầu thu âm
-
+    // Begin capture
     input->startCapture();
 }
 
@@ -426,7 +425,7 @@ void AudioManager::codecTaskLoop()
     ESP_LOGI(TAG, "Codec task started");
 
     constexpr size_t PCM_FRAME = 256;   // 16 ms @16kHz
-    constexpr size_t ADPCM_FRAME = 512; // server yêu cầu
+    constexpr size_t ADPCM_FRAME = 512; // Server-side expects 512-byte chunks
 
     int16_t pcm_in[PCM_FRAME];
     uint8_t encoded[ADPCM_FRAME];
