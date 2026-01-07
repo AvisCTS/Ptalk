@@ -6,9 +6,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
 
 # =====================================================
-# IMA ADPCM TABLES (CHUẨN)
+# IMA ADPCM TABLES (Chuẩn)
 # =====================================================
-
 STEP_TABLE = [
      7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
     19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -25,72 +24,56 @@ INDEX_TABLE = [-1, -1, -1, -1, 2, 4, 6, 8,
                -1, -1, -1, -1, 2, 4, 6, 8]
 
 # =====================================================
-# ADPCM ENCODE / DECODE (HIGH nibble trước)
+# ADPCM CODEC
 # =====================================================
-
 def adpcm_decode(adpcm, state):
     predictor, index = state or (0, 0)
     pcm = bytearray()
-
     for b in adpcm:
-        for nibble in ((b >> 4) & 0x0F, b & 0x0F):
+        for nibble in ((b >> 4) & 0x0F, b & 0x0F): # High nibble trước
             step = STEP_TABLE[index]
             diff = step >> 3
-
             if nibble & 1: diff += step >> 2
             if nibble & 2: diff += step >> 1
             if nibble & 4: diff += step
             if nibble & 8: diff = -diff
-
             predictor += diff
             predictor = max(-32768, min(32767, predictor))
-
-            index += INDEX_TABLE[nibble]
-            index = max(0, min(88, index))
-
+            index = max(0, min(88, index + INDEX_TABLE[nibble]))
             pcm += predictor.to_bytes(2, "little", signed=True)
-
     return pcm, (predictor, index)
-
 
 def adpcm_encode(pcm, state):
     predictor, index = state or (0, 0)
     out = bytearray()
     high = True
     byte = 0
-
-    samples = [int.from_bytes(pcm[i:i+2], "little", signed=True)
-               for i in range(0, len(pcm), 2)]
-
+    samples = [int.from_bytes(pcm[i:i+2], "little", signed=True) for i in range(0, len(pcm), 2)]
     for s in samples:
         step = STEP_TABLE[index]
         diff = s - predictor
-        code = 0
-
-        if diff < 0:
-            code |= 8
-            diff = -diff
-
+        code = 0x08 if diff < 0 else 0x00
+        if code: diff = -diff
         if diff >= step:
             code |= 4
             diff -= step
-        if diff >= step >> 1:
+        step >>= 1
+        if diff >= step:
             code |= 2
-            diff -= step >> 1
-        if diff >= step >> 2:
+            diff -= step
+        step >>= 1
+        if diff >= step:
             code |= 1
-
-        delta = step >> 3
-        if code & 1: delta += step >> 2
-        if code & 2: delta += step >> 1
-        if code & 4: delta += step
-        if code & 8: delta = -delta
-
-        predictor += delta
+        
+        # Update predictor
+        step = STEP_TABLE[index]
+        diffq = step >> 3
+        if code & 4: diffq += step
+        if code & 2: diffq += step >> 1
+        if code & 1: diffq += step >> 2
+        predictor += -diffq if code & 8 else diffq
         predictor = max(-32768, min(32767, predictor))
-
-        index += INDEX_TABLE[code]
-        index = max(0, min(88, index))
+        index = max(0, min(88, index + INDEX_TABLE[code]))
 
         if high:
             byte = (code & 0x0F) << 4
@@ -98,25 +81,14 @@ def adpcm_encode(pcm, state):
         else:
             out.append(byte | (code & 0x0F))
             high = True
-
-    if not high:
-        out.append(byte)
-
     return out, (predictor, index)
 
 # =====================================================
-# SERVER
+# SERVER CONFIG
 # =====================================================
-
-HOST = "0.0.0.0"
-PORT = 8000
 SAMPLE_RATE = 16000
-FRAME_ADPCM = 512
-SEND_INTERVAL = 0.06
-
 RECORD_DIR = "recordings"
-REPLY_WAV = "chẳng-phải-tình-đầu-sao-đau-đến-thế.wav"   # <-- BẠN ĐỔI FILE NÀY
-
+REPLY_WAV = "chẳng-phải-tình-đầu-sao-đau-đến-thế.wav" # Đảm bảo file này tồn tại trong cùng thư mục
 os.makedirs(RECORD_DIR, exist_ok=True)
 
 app = FastAPI()
@@ -124,81 +96,108 @@ app = FastAPI()
 def log(tag, msg):
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {tag} {msg}")
 
-@app.websocket("/ws")
-async def ws(ws: WebSocket):
-    await ws.accept()
-    log("📡", "ESP connected")
+async def send_wav(ws: WebSocket, path: str):
+    """Gửi file WAV trả lời, có hỗ trợ Cancel để ngắt lời"""
+    try:
+        if not os.path.exists(path):
+            log("⚠️", f"File {path} not found")
+            return
 
-    rx_state = None
+        # Thông báo bắt đầu phát
+        await ws.send_text("PROCESSING_START")
+        await asyncio.sleep(0.1)
+        await ws.send_text("01") 
+        await ws.send_text("SPEAK_START")
+
+        tx_state = (0, 0)
+        with wave.open(path, "rb") as wf:
+            while True:
+                pcm = wf.readframes(1024)
+                if not pcm: break
+                
+                adpcm, tx_state = adpcm_encode(pcm, tx_state)
+                await ws.send_bytes(adpcm)
+                await asyncio.sleep(0.060) 
+
+        # Chỉ gửi kết thúc khi file đã phát HẾT bình thường
+        await ws.send_text("TTS_END")
+        log("🏁", "Playback finished naturally")
+
+    except asyncio.CancelledError:
+        # KHI BỊ NGẮT LỜI: 
+        # Tuyệt đối KHÔNG gửi SPEAK_END hay bất cứ gì về ESP32
+        # ESP32 đang trong trạng thái LISTENING, nếu gửi tin nhắn kết thúc 
+        # nó sẽ nhảy về IDLE và kết thúc thu âm ngay lập tức.
+        log("🚫", "Playback Task Silently Cancelled (Interrupted)")
+        raise # Ném lỗi ra để task kết thúc sạch sẽ
+
+    except Exception as e:
+        log("❌", f"Error in send_wav: {e}")
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    log("📡", "ESP32 connected")
+
+    rx_state = (0, 0)
     pcm_buf = []
     recording = False
+    current_tts_task = None # Quản lý task gửi âm thanh hiện tại
 
     try:
         while True:
             data = await ws.receive()
 
+            # --- XỬ LÝ DỮ LIỆU ÂM THANH TỪ MIC ---
             if "bytes" in data:
-                adpcm = data["bytes"]
-                log("⬆️ RX", f"{len(adpcm)} bytes")
-
                 if recording:
+                    adpcm = data["bytes"]
+                    # log("⬆️ RX", f"{len(adpcm)} bytes")
                     pcm, rx_state = adpcm_decode(adpcm, rx_state)
                     pcm_buf.append(pcm)
 
+            # --- XỬ LÝ TIN NHẮN ĐIỀU KHIỂN ---
             elif "text" in data:
                 msg = data["text"]
-                log("📩 RX", msg)
+                log("📩 TXT", msg)
+
+                if "identify" in msg:
+                    continue
 
                 if msg == "START":
+                    # LOGIC NGẮT LỜI: Hủy task gửi âm thanh cũ nếu đang chạy
+                    if current_tts_task and not current_tts_task.done():
+                        current_tts_task.cancel()
+                        log("✂️", "Interrupted previous TTS")
+                    
                     pcm_buf.clear()
-                    rx_state = None
+                    rx_state = (0, 0)
                     recording = True
                     log("🎙️", "Record START")
 
                 elif msg == "END":
                     recording = False
-                    path = save_wav(pcm_buf)
-                    log("💾", f"Saved {path}")
-                    asyncio.create_task(send_wav(ws, REPLY_WAV))
+                    if pcm_buf:
+                        filename = f"rec_{datetime.now().strftime('%H%M%S')}.wav"
+                        path = os.path.join(RECORD_DIR, filename)
+                        with wave.open(path, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(SAMPLE_RATE)
+                            wf.writeframes(b"".join(pcm_buf))
+                        log("💾", f"Saved {path}")
+                        
+                        # Bắt đầu gửi file trả lời (Lưu task để có thể cancel)
+                        current_tts_task = asyncio.create_task(send_wav(ws, REPLY_WAV))
+                    else:
+                        log("⚠️", "Empty recording ignored")
 
     except WebSocketDisconnect:
         log("🔌", "Disconnected")
-
-def save_wav(chunks):
-    path = os.path.join(RECORD_DIR, f"rec_{datetime.now().strftime('%H%M%S')}.wav")
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(b"".join(chunks))    
-    return path
-
-async def send_wav(ws, path):
-    await ws.send_text("PROCESSING_START")
-    await ws.send_text("01")
-    await ws.send_text("SPEAK_START")
-
-    tx_state = None
-    with wave.open(path, "rb") as wf:
-        while True:
-            # Đọc 1024 mẫu (tương đương 2048 bytes PCM)
-            # 1024 mẫu nén ADPCM (4-bit) sẽ ra ĐÚNG 512 bytes
-            pcm = wf.readframes(1024) 
-            if not pcm:
-                break
-
-            adpcm, tx_state = adpcm_encode(pcm, tx_state)
-            
-            # XÓA DÒNG NÀY: adpcm = adpcm.ljust(FRAME_ADPCM, b'\x00')
-            # Gửi trực tiếp adpcm (lúc này đã đủ 512 bytes)
-            await ws.send_bytes(adpcm)
-            
-            # Quan trọng: 1024 mẫu ở 16kHz chiếm 64ms thời gian thực
-            await asyncio.sleep(0.064) 
-
-    await ws.send_text("TTS_END")
-    log("🏁", "Playback done")
+        if current_tts_task: current_tts_task.cancel()
+    except Exception as e:
+        log("❌", f"Websocket Error: {e}")
 
 if __name__ == "__main__":
-    log("🚀", f"Server ws://{HOST}:{PORT}/ws")
-    uvicorn.run(app, host=HOST, port=PORT)
+    log("🚀", "Server starting at ws://0.0.0.0:8000/ws")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
