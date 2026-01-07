@@ -71,9 +71,6 @@ private:
     // Serve characteristic reads with the latest config, version, and Wi‑Fi list.
     void handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t gatts_if);
 
-    // Serialize Wi‑Fi scan results into a compact JSON array string.
-    void buildWiFiListJSON();
-
 private:
     std::string adv_name_;
     bool started_ = false;

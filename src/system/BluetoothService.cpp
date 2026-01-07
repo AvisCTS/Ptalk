@@ -75,6 +75,7 @@ bool BluetoothService::start()
     if (started_)
         return true;
 
+    // Sắp xếp advertising parameters
     esp_ble_adv_params_t adv_params = {};
     adv_params.adv_int_min = 0x20;
     adv_params.adv_int_max = 0x40;
@@ -83,11 +84,28 @@ bool BluetoothService::start()
     adv_params.channel_map = ADV_CHNL_ALL;
     adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
 
-    esp_ble_gap_set_device_name(adv_name_.c_str());
+    // Tên BLE advertising cố định = "PTalk" (để scan filter tự động)
+    const char* ble_adv_name = "PTalk";
+    esp_ble_gap_set_device_name(ble_adv_name);
+    
+    // Thêm Complete Local Name vào advertising data để hiển thị trong nRF Connect
+    uint8_t adv_data[31];
+    size_t adv_len = 0;
+    size_t name_len = strlen(ble_adv_name);
+    
+    // AD Type 0x09 = Complete Local Name
+    adv_data[adv_len++] = name_len + 1;  // Length
+    adv_data[adv_len++] = 0x09;          // Type: Complete Local Name
+    memcpy(&adv_data[adv_len], ble_adv_name, name_len);
+    adv_len += name_len;
+    
+    // Set advertising data
+    esp_ble_gap_config_adv_data_raw(adv_data, adv_len);
+    
     esp_ble_gap_start_advertising(&adv_params);
 
     started_ = true;
-    ESP_LOGI(TAG, "BLE Advertising started: %s", adv_name_.c_str());
+    ESP_LOGI(TAG, "BLE Advertising started: %s (len=%d)", ble_adv_name, (int)adv_len);
     return true;
 }
 
@@ -157,12 +175,7 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
     {
         s_instance->mtu_size_ = param->mtu.mtu;
         ESP_LOGI(TAG, "MTU exchanged: %d bytes", param->mtu.mtu);
-        
-        // Regenerate Wi‑Fi list to respect the new MTU
-        if (!s_instance->wifi_networks_.empty())
-        {
-            s_instance->buildWiFiListJSON();
-        }
+
         break;
     }
 
@@ -254,31 +267,47 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
     }
     else if (param->read.handle == char_handles[9])
     {
-        // Send Wi‑Fi list JSON (MTU will truncate if oversized)
-        size_t len = std::min<size_t>(wifi_list_json_.length(), 512);
-        rsp.attr_value.len = len;
-        memcpy(rsp.attr_value.value, wifi_list_json_.c_str(), len);
-        ESP_LOGI(TAG, "WiFi list sent: %d/%d bytes", len, (int)wifi_list_json_.length());
+        // Streaming WiFi list theo index: mỗi lần read gửi 1 network
+        ESP_LOGI(TAG, "WiFi read request: index=%d, total=%d", (int)wifi_read_index_, (int)wifi_networks_.size());
+        
+        if (wifi_read_index_ < wifi_networks_.size())
+        {
+            // Format: SSID:RSSI (ví dụ: "B14-PTIT:-49")
+            auto &net = wifi_networks_[wifi_read_index_];
+            std::string response = net.ssid + ":" + std::to_string(net.rssi);
+            
+            // Kiểm tra MTU limit (reserve 3 bytes cho ATT header)
+            size_t max_payload = mtu_size_ > 3 ? (mtu_size_ - 3) : 20;
+            if (response.length() > max_payload)
+            {
+                // SSID quá dài, cắt ngắn
+                response = response.substr(0, max_payload);
+                ESP_LOGW(TAG, "WiFi[%d] truncated to %d bytes", (int)wifi_read_index_, (int)max_payload);
+            }
+            
+            rsp.attr_value.len = response.length();
+            memcpy(rsp.attr_value.value, response.c_str(), rsp.attr_value.len);
+            
+            ESP_LOGI(TAG, "WiFi[%d/%d]: %s (%d bytes, MTU=%d)", 
+                     (int)wifi_read_index_, (int)wifi_networks_.size()-1, 
+                     response.c_str(), rsp.attr_value.len, mtu_size_);
+            wifi_read_index_++;
+        }
+        else
+        {
+            // Hết danh sách, gửi "END"
+            std::string end_msg = "END";
+            rsp.attr_value.len = end_msg.length();
+            memcpy(rsp.attr_value.value, end_msg.c_str(), rsp.attr_value.len);
+            
+            // Reset index để client có thể request lại
+            wifi_read_index_ = 0;
+            ESP_LOGI(TAG, "WiFi list END, reset index");
+        }
     }
     
 
     esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, ESP_GATT_OK, &rsp);
-}
-
-void BluetoothService::buildWiFiListJSON()
-{
-    // Format: ["SSID1:-49","SSID2:-61","SSID3:-75"] (JSON array for easy parsing)
-    wifi_list_json_ = "[";
-    
-    for (size_t i = 0; i < wifi_networks_.size(); i++)
-    {
-        if (i > 0)
-            wifi_list_json_ += ",";
-        wifi_list_json_ += "\"" + wifi_networks_[i].ssid + ":" + std::to_string(wifi_networks_[i].rssi) + "\"";
-    }
-    
-    wifi_list_json_ += "]";
-    ESP_LOGI(TAG, "WiFi list JSON: %s (%d bytes)", wifi_list_json_.c_str(), (int)wifi_list_json_.length());
 }
 
 void BluetoothService::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {}
