@@ -278,6 +278,15 @@ bool DeviceProfile::setup(AppController &app)
 {
     ESP_LOGI(TAG, "DeviceProfile setup begin");
 
+    // Ensure NVS is initialized before loading user settings
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
+
     // Load user-overridable settings (from NVS) and merge with factory defaults
     user_cfg::UserSettings user = user_cfg::load();
 
@@ -409,7 +418,7 @@ bool DeviceProfile::setup(AppController &app)
     // Đặt địa chỉ IP và port của WebSocket server (ví dụ: 192.168.1.100:8080)
     // Thêm path nếu server yêu cầu, ví dụ: ws://171.226.10.121:8000/ws
     // Uvicorn/FastAPI thường khai báo endpoint WebSocket tại "/ws".
-    net_cfg.ws_url = "ws://171.226.10.121:8000/ws";
+    net_cfg.ws_url = "ws://10.170.75.42:8000/ws";
 
     if (!network_mgr->init(net_cfg))
     {
@@ -428,6 +437,8 @@ bool DeviceProfile::setup(AppController &app)
     // and drive InteractionState to SPEAKING while audio is arriving.
     StreamBufferHandle_t spk_sb = audio_mgr->getSpeakerEncodedBuffer();
     network_mgr->setMicBuffer(audio_mgr->getMicEncodedBuffer()); // Uplink mic buffer
+    // Expose managers to NetworkManager for real-time config (volume/brightness)
+    network_mgr->setManagers(audio_mgr.get(), display_mgr.get());
     AudioManager *audio_ptr = audio_mgr.get();                   // Capture pointer for disconnect handler
     NetworkManager *network_ptr = network_mgr.get();             // For session flag access
 
@@ -583,6 +594,9 @@ bool DeviceProfile::setup(AppController &app)
 
     // Link PowerManager → DisplayManager for battery % updates
     power_mgr->setDisplayManager(display_mgr.get());
+
+    // Expose PowerManager so WS status/handshake can report real battery %
+    network_mgr->setPowerManager(power_mgr.get());
 
     // App-level power behavior (deep sleep re-check interval)
     AppController::Config app_cfg{};
