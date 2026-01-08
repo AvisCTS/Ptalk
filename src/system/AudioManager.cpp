@@ -39,6 +39,16 @@ void AudioManager::setCodec(std::unique_ptr<AudioCodec> cdc)
     codec = std::move(cdc);
 }
 
+void AudioManager::setVolume(uint8_t percent)
+{
+    if (percent > 100) percent = 100;
+    if (output)
+    {
+        output->setVolume(percent);
+        ESP_LOGI(TAG, "Volume set to %u%%", (unsigned)percent);
+    }
+}
+
 // ============================================================================
 // Init / Start / Stop
 // ============================================================================

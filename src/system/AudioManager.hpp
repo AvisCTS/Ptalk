@@ -67,6 +67,9 @@ public:
     // Enable low-power mode; stops capture/playback when true.
     void setPowerSaving(bool enable);
 
+    // Set speaker output volume (0-100%). Applies immediately if output present.
+    void setVolume(uint8_t percent);
+
 private:
     // ------------------------------------------------------------------------
     // State callback
