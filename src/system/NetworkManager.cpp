@@ -15,6 +15,7 @@
 #include "nvs.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 std::string getDeviceMacID()
 {
@@ -1182,6 +1183,7 @@ std::string NetworkManager::getCurrentStatusJson() const
     uint8_t volume = nmgr_load_u8("volume", 60);
     uint8_t brightness = nmgr_load_u8("brightness", 100);
     uint8_t battery = power_manager ? power_manager->getPercent() : 85;
+    uint32_t uptime_sec = static_cast<uint32_t>(esp_timer_get_time() / 1000000ULL);
     
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "ok");
@@ -1192,7 +1194,7 @@ std::string NetworkManager::getCurrentStatusJson() const
     cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
     cJSON_AddNumberToObject(root, "volume", volume); // From NVS (WS/BLE persisted)
     cJSON_AddNumberToObject(root, "brightness", brightness); // From NVS (WS/BLE persisted)
-    cJSON_AddNumberToObject(root, "uptime_sec", 0); // TODO: Track uptime
+    cJSON_AddNumberToObject(root, "uptime_sec", uptime_sec);
 
     char *json_str = cJSON_Print(root);
     std::string result(json_str);

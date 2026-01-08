@@ -515,6 +515,8 @@ bool DeviceProfile::setup(AppController &app)
                             {
     // 🟢 Vừa nhấn nút (Vào LISTENING)
     if (new_state == state::InteractionState::LISTENING && prev_interaction_state != state::InteractionState::LISTENING) {
+        // End any ongoing speaking session to allow next TTS session
+        network_ptr->endSpeakingSession();
         network_ptr->sendText("START");
     }
     // 🔴 Vừa thả nút (Thoát LISTENING)
