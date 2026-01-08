@@ -16,6 +16,7 @@
 class WifiService;     // Low-level WiFi
 class WebSocketClient; // Low-level WebSocket
 struct WifiInfo;
+class PowerManager;
 // NetworkManager coordinates Wi‑Fi and WebSocket, publishes connectivity state,
 // and bridges WS messages to the app. It owns retry logic; Wi‑Fi scanning/portal
 // and driver-level connection details stay in WifiService.
@@ -95,6 +96,11 @@ public:
     // Set BluetoothService for BLE config mode handoff.
     void setBluetoothService(std::shared_ptr<BluetoothService> ble) { ble_service = ble; }
 
+    // Set external manager references for handling config updates
+    void setManagers(class AudioManager *audio, class DisplayManager *display);
+    void setPowerManager(PowerManager *power) { power_manager = power; }
+
+
     // Check if a speaking session is active (prevents SPEAKING spam).
     bool isSpeakingSessionActive() const { return speaking_session_active; }
 
@@ -129,6 +135,31 @@ public:
     /// @return EmotionState, or NEUTRAL if code not recognized
     static state::EmotionState parseEmotionCode(const std::string &code);
 
+    // ======================================================
+    // Real-time WebSocket Configuration Support
+    // ======================================================
+    /// Send device handshake to server (called on WS connection)
+    bool sendDeviceHandshake();
+
+    /// Register callback for external config change requests (from server or internal)
+    /// Useful for AppController to respond to config updates
+    void onConfigUpdate(std::function<void(const std::string &, const std::string &)> cb);
+
+    /// Apply volume configuration (0-100)
+    bool applyVolumeConfig(uint8_t volume);
+
+    /// Apply brightness configuration (0-100)
+    bool applyBrightnessConfig(uint8_t brightness);
+
+    /// Apply device name configuration
+    bool applyDeviceNameConfig(const std::string &name);
+
+    /// Apply WiFi configuration (triggers reboot after save)
+    bool applyWiFiConfig(const std::string &ssid, const std::string &password);
+
+    /// Get current device status for status query response
+    std::string getCurrentStatusJson() const;
+
 private:
     // ======================================================
     // Internal handlers
@@ -147,6 +178,10 @@ private:
     // Receive message from WebSocketClient
     // Handle inbound WS text and dispatch to callbacks/state updates.
     void handleWsTextMessage(const std::string &msg);
+
+    // Process configuration command from WebSocket message
+    void handleConfigCommand(const std::string &json_msg);
+
 
     // Handle inbound WS binary payloads (firmware or app data).
     void handleWsBinaryMessage(const uint8_t *data, size_t len);
@@ -175,6 +210,11 @@ private:
     std::unique_ptr<WebSocketClient> ws;
     // Bluetooth service for BLE config mode
     std::shared_ptr<BluetoothService> ble_service;
+    
+    // External manager references for config updates (optional, set via setManagers)
+    class AudioManager *audio_manager = nullptr;
+    class DisplayManager *display_manager = nullptr;
+    PowerManager *power_manager = nullptr;
 
     // ======================================================
     // Config storage
@@ -212,6 +252,7 @@ private:
     std::function<void(const std::string &)> on_text_cb = nullptr;
     std::function<void(const uint8_t *, size_t)> on_binary_cb = nullptr;
     std::function<void()> on_disconnect_cb = nullptr;
+    std::function<void(const std::string &, const std::string &)> on_config_update_cb = nullptr;
 
     // ======================================================
     // OTA Callbacks

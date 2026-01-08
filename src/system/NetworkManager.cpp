@@ -1,11 +1,18 @@
 #include "NetworkManager.hpp"
 #include "WifiService.hpp"
 #include "WebSocketClient.hpp"
+#include "system/AudioManager.hpp"
+#include "system/DisplayManager.hpp"
+#include "system/PowerManager.hpp"
+#include "system/WSConfig.hpp"
 
 #include "esp_mac.h"
 #include <sstream>
 #include <iomanip>
 #include "Version.hpp"
+#include "cJSON.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 #include "esp_log.h"
 
@@ -426,18 +433,10 @@ void NetworkManager::handleWsStatus(int status)
         ws_running = true;
 
         publishState(state::ConnectivityState::ONLINE);
-        // 1. Gather identity info
-        std::string device_id = getDeviceEfuseID();
-        std::string app_version = app_meta::APP_VERSION;
-
-        // 2. Build JSON identity message for the server
-        std::string identity_msg = "{\"type\":\"identify\", \"device_id\":\"" + device_id +
-                                   "\", \"version\":\"" + app_version + "\"}";
-
-        // 3. Send to server
-        sendText(identity_msg);
-
-        ESP_LOGI(TAG, "Identified to server: ID=%s, Ver=%s", device_id.c_str(), app_version.c_str());
+        
+        // Send device handshake to server with all info and device_id for linking
+        sendDeviceHandshake();
+        
         break;
     }
 }
@@ -448,6 +447,21 @@ void NetworkManager::handleWsStatus(int status)
 void NetworkManager::handleWsTextMessage(const std::string &msg)
 {
     ESP_LOGI(TAG, "WS Text Message: %s", msg.c_str());
+
+    // Check if this is a config command (JSON with "cmd" field)
+    cJSON *json = cJSON_Parse(msg.c_str());
+    if (json)
+    {
+        cJSON *cmd_field = cJSON_GetObjectItem(json, "cmd");
+        if (cmd_field && cmd_field->valuestring)  // Check if it's a string
+        {
+            // This is a config command
+            cJSON_Delete(json);
+            handleConfigCommand(msg);
+            return;
+        }
+        cJSON_Delete(json);
+    }
 
     // Try parsing emotion code if message is simple 2-char format
     if (msg.length() == 2)
@@ -808,4 +822,383 @@ state::EmotionState NetworkManager::parseEmotionCode(const std::string &code)
 
     ESP_LOGW(TAG, "Unknown emotion code: %s", code.c_str());
     return state::EmotionState::NEUTRAL;
+}
+// ============================================================================
+// REAL-TIME WEBSOCKET CONFIGURATION
+// ============================================================================
+
+static bool nmgr_save_u8(const char* key, uint8_t value)
+{
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK)
+        return false;
+    esp_err_t e = nvs_set_u8(h, key, value);
+    nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static bool nmgr_save_str(const char* key, const std::string& value)
+{
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK)
+        return false;
+    esp_err_t e = nvs_set_str(h, key, value.c_str());
+    nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static uint8_t nmgr_load_u8(const char* key, uint8_t def_val)
+{
+    uint8_t v = def_val;
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READONLY, &h) == ESP_OK)
+    {
+        nvs_get_u8(h, key, &v);
+        nvs_close(h);
+    }
+    return v;
+}
+
+static std::string nmgr_load_str(const char* key, const char* def_val)
+{
+    std::string out;
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READONLY, &h) == ESP_OK)
+    {
+        size_t required = 0;
+        if (nvs_get_str(h, key, nullptr, &required) == ESP_OK && required > 0)
+        {
+            out.resize(required);
+            if (nvs_get_str(h, key, out.data(), &required) == ESP_OK)
+            {
+                if (!out.empty() && out.back() == '\0')
+                    out.pop_back();
+            }
+        }
+        nvs_close(h);
+    }
+    if (out.empty())
+        out = def_val;
+    return out;
+}
+
+void NetworkManager::setManagers(class AudioManager *audio, class DisplayManager *display)
+{
+    audio_manager = audio;
+    display_manager = display;
+}
+
+void NetworkManager::onConfigUpdate(std::function<void(const std::string &, const std::string &)> cb)
+{
+    on_config_update_cb = cb;
+}
+
+bool NetworkManager::sendDeviceHandshake()
+{
+    if (!ws_running)
+        return false;
+
+    std::string device_id = getDeviceEfuseID();
+    std::string app_version = app_meta::APP_VERSION;
+    std::string device_name = nmgr_load_str("device_name", "PTalk");
+    uint8_t battery = power_manager ? power_manager->getPercent() : 85;
+
+    // Build handshake message with device info
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "cmd", "device_handshake");
+    cJSON_AddStringToObject(root, "device_id", device_id.c_str());
+    cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
+    cJSON_AddStringToObject(root, "device_name", device_name.c_str());
+    cJSON_AddNumberToObject(root, "battery_percent", battery);
+    cJSON_AddStringToObject(root, "connectivity_state", "ONLINE");
+
+    char *json_str = cJSON_Print(root);
+    bool result = sendText(json_str);
+    
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "Device handshake sent to server");
+    return result;
+}
+
+void NetworkManager::handleConfigCommand(const std::string &json_msg)
+{
+    cJSON *root = cJSON_Parse(json_msg.c_str());
+    if (!root)
+    {
+        ESP_LOGE(TAG, "Invalid JSON config command: %s", json_msg.c_str());
+        return;
+    }
+
+    // Extract command type
+    cJSON *cmd_obj = cJSON_GetObjectItem(root, "cmd");
+    if (!cmd_obj || !cmd_obj->valuestring)
+    {
+        ESP_LOGE(TAG, "Config command missing or invalid 'cmd' field");
+        cJSON_Delete(root);
+        return;
+    }
+
+    std::string cmd_str = cmd_obj->valuestring;
+    ws_config::ConfigCommand cmd = ws_config::parseCommandString(cmd_str);
+
+    ESP_LOGI(TAG, "Processing config command: %s", cmd_str.c_str());
+
+    // Process command
+    switch (cmd)
+    {
+    case ws_config::ConfigCommand::SET_AUDIO_VOLUME:
+    {
+        cJSON *vol_obj = cJSON_GetObjectItem(root, "volume");
+        if (vol_obj && vol_obj->type == cJSON_Number)
+        {
+            uint8_t volume = (uint8_t)vol_obj->valueint;
+            applyVolumeConfig(volume);
+        }
+        break;
+    }
+
+    case ws_config::ConfigCommand::SET_BRIGHTNESS:
+    {
+        cJSON *bright_obj = cJSON_GetObjectItem(root, "brightness");
+        if (bright_obj && bright_obj->type == cJSON_Number)
+        {
+            uint8_t brightness = (uint8_t)bright_obj->valueint;
+            applyBrightnessConfig(brightness);
+        }
+        break;
+    }
+
+    case ws_config::ConfigCommand::SET_DEVICE_NAME:
+    {
+        cJSON *name_obj = cJSON_GetObjectItem(root, "device_name");
+        if (name_obj && name_obj->valuestring)
+        {
+            applyDeviceNameConfig(name_obj->valuestring);
+        }
+        break;
+    }
+
+    case ws_config::ConfigCommand::SET_WIFI:
+    {
+        // Wi‑Fi configuration is NOT allowed via WebSocket; use BLE portal instead.
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "status", ws_config::statusToString(ws_config::ResponseStatus::NOT_SUPPORTED));
+        cJSON_AddStringToObject(resp, "message", "WiFi config not supported over WebSocket. Use BLE.");
+        cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
+        char *resp_str = cJSON_Print(resp);
+        sendText(resp_str);
+        cJSON_free(resp_str);
+        cJSON_Delete(resp);
+        break;
+    }
+
+    case ws_config::ConfigCommand::REQUEST_STATUS:
+    {
+        // Send current device status
+        std::string status_json = getCurrentStatusJson();
+        sendText(status_json);
+        break;
+    }
+
+    case ws_config::ConfigCommand::REBOOT:
+    {
+        cJSON *ack = cJSON_CreateObject();
+        cJSON_AddStringToObject(ack, "status", "ok");
+        cJSON_AddStringToObject(ack, "message", "Rebooting...");
+        char *ack_str = cJSON_Print(ack);
+        sendText(ack_str);
+        cJSON_free(ack_str);
+        cJSON_Delete(ack);
+        
+        // Delay before reboot to send ack
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+        break;
+    }
+
+    case ws_config::ConfigCommand::REQUEST_OTA:
+    {
+        // Optional version field
+        std::string version;
+        cJSON *ver_obj = cJSON_GetObjectItem(root, "version");
+        if (ver_obj && ver_obj->valuestring)
+        {
+            version = ver_obj->valuestring;
+        }
+
+        bool ok = requestFirmwareUpdate(version);
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "status", ok ? "ok" : "error");
+        if (!version.empty())
+            cJSON_AddStringToObject(resp, "version", version.c_str());
+        cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
+        if (!ok)
+            cJSON_AddStringToObject(resp, "message", "OTA request failed or WS not connected");
+
+        char *resp_str = cJSON_Print(resp);
+        sendText(resp_str);
+        cJSON_free(resp_str);
+        cJSON_Delete(resp);
+        break;
+    }
+
+    default:
+        ESP_LOGW(TAG, "Unknown config command: %s", cmd_str.c_str());
+        break;
+    }
+
+    cJSON_Delete(root);
+}
+
+bool NetworkManager::applyVolumeConfig(uint8_t volume)
+{
+    if (volume > 100)
+        volume = 100;
+
+    ESP_LOGI(TAG, "Applying volume config: %d%%", volume);
+
+    if (audio_manager)
+    {
+        audio_manager->setVolume(volume);
+    }
+
+    // Persist to NVS for next boot
+    nmgr_save_u8("volume", volume);
+
+    // Send response
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddNumberToObject(response, "volume", volume);
+    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
+    char *resp_str = cJSON_Print(response);
+    
+    bool result = sendText(resp_str);
+    
+    cJSON_free(resp_str);
+    cJSON_Delete(response);
+
+    // Callback
+    if (on_config_update_cb)
+        on_config_update_cb("volume", std::to_string(volume));
+
+    return result;
+}
+
+bool NetworkManager::applyBrightnessConfig(uint8_t brightness)
+{
+    if (brightness > 100)
+        brightness = 100;
+
+    ESP_LOGI(TAG, "Applying brightness config: %d%%", brightness);
+
+    if (display_manager)
+    {
+        display_manager->setBrightness(brightness);
+    }
+
+    // Persist to NVS for next boot
+    nmgr_save_u8("brightness", brightness);
+
+    // Send response
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddNumberToObject(response, "brightness", brightness);
+    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
+    char *resp_str = cJSON_Print(response);
+    
+    bool result = sendText(resp_str);
+    
+    cJSON_free(resp_str);
+    cJSON_Delete(response);
+
+    // Callback
+    if (on_config_update_cb)
+        on_config_update_cb("brightness", std::to_string(brightness));
+
+    return result;
+}
+
+bool NetworkManager::applyDeviceNameConfig(const std::string &name)
+{
+    ESP_LOGI(TAG, "Applying device name config: %s", name.c_str());
+
+    // Persist to NVS for next boot
+    nmgr_save_str("device_name", name);
+    
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddStringToObject(response, "device_name", name.c_str());
+    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
+    char *resp_str = cJSON_Print(response);
+    
+    bool result = sendText(resp_str);
+    
+    cJSON_free(resp_str);
+    cJSON_Delete(response);
+
+    // Callback
+    if (on_config_update_cb)
+        on_config_update_cb("device_name", name);
+
+    return result;
+}
+
+bool NetworkManager::applyWiFiConfig(const std::string &ssid, const std::string &password)
+{
+    ESP_LOGI(TAG, "Applying WiFi config: SSID=%s", ssid.c_str());
+
+    // Save to NVS (via setCredentials)
+    setCredentials(ssid, password);
+
+    // Send response before restart
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "status", "ok");
+    cJSON_AddStringToObject(response, "message", "WiFi configured, restarting...");
+    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
+    char *resp_str = cJSON_Print(response);
+    
+    bool result = sendText(resp_str);
+    
+    cJSON_free(resp_str);
+    cJSON_Delete(response);
+
+    // Delay before restart
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+
+    return result;
+}
+
+std::string NetworkManager::getCurrentStatusJson() const
+{
+    std::string device_id = getDeviceEfuseID();
+    std::string app_version = app_meta::APP_VERSION;
+    std::string device_name = nmgr_load_str("device_name", "PTalk");
+    uint8_t volume = nmgr_load_u8("volume", 60);
+    uint8_t brightness = nmgr_load_u8("brightness", 100);
+    uint8_t battery = power_manager ? power_manager->getPercent() : 85;
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "status", "ok");
+    cJSON_AddStringToObject(root, "device_id", device_id.c_str());
+    cJSON_AddStringToObject(root, "device_name", device_name.c_str());
+    cJSON_AddNumberToObject(root, "battery_percent", battery);
+    cJSON_AddStringToObject(root, "connectivity_state", "ONLINE");
+    cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
+    cJSON_AddNumberToObject(root, "volume", volume); // From NVS (WS/BLE persisted)
+    cJSON_AddNumberToObject(root, "brightness", brightness); // From NVS (WS/BLE persisted)
+    cJSON_AddNumberToObject(root, "uptime_sec", 0); // TODO: Track uptime
+
+    char *json_str = cJSON_Print(root);
+    std::string result(json_str);
+    
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+
+    return result;
 }
