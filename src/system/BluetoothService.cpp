@@ -19,13 +19,18 @@ BluetoothService::~BluetoothService()
     stop();
 }
 
-bool BluetoothService::init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks)
+bool BluetoothService::init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks, const ConfigData *current_config)
 {
     static bool s_bt_initialized = false;
     if (s_bt_initialized)
         return true;
 
     adv_name_ = adv_name;
+    
+    // Restore current device configuration (device_name, volume, brightness)
+    if (current_config)
+        temp_cfg_ = *current_config;
+
     esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -75,7 +80,6 @@ bool BluetoothService::start()
     if (started_)
         return true;
 
-    // Sắp xếp advertising parameters
     esp_ble_adv_params_t adv_params = {};
     adv_params.adv_int_min = 0x20;
     adv_params.adv_int_max = 0x40;
@@ -84,28 +88,35 @@ bool BluetoothService::start()
     adv_params.channel_map = ADV_CHNL_ALL;
     adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
 
-    // Tên BLE advertising cố định = "PTalk" (để scan filter tự động)
     const char* ble_adv_name = "PTalk";
     esp_ble_gap_set_device_name(ble_adv_name);
     
-    // Thêm Complete Local Name vào advertising data để hiển thị trong nRF Connect
     uint8_t adv_data[31];
     size_t adv_len = 0;
+    
+    // Service UUID 0xFF01 in advertising data
+    adv_data[adv_len++] = 3;      // Length
+    adv_data[adv_len++] = 0x03;   // Type: Complete List of 16-bit UUIDs
+    adv_data[adv_len++] = 0x01;   // 0xFF01 LSB
+    adv_data[adv_len++] = 0xFF;   // 0xFF01 MSB
+    
+    // Scan response with device name
+    uint8_t scan_data[31];
+    size_t scan_len = 0;
     size_t name_len = strlen(ble_adv_name);
     
-    // AD Type 0x09 = Complete Local Name
-    adv_data[adv_len++] = name_len + 1;  // Length
-    adv_data[adv_len++] = 0x09;          // Type: Complete Local Name
-    memcpy(&adv_data[adv_len], ble_adv_name, name_len);
-    adv_len += name_len;
+    scan_data[scan_len++] = name_len + 1;  // Length
+    scan_data[scan_len++] = 0x09;          // Type: Complete Local Name
+    memcpy(&scan_data[scan_len], ble_adv_name, name_len);
+    scan_len += name_len;
     
-    // Set advertising data
     esp_ble_gap_config_adv_data_raw(adv_data, adv_len);
+    esp_ble_gap_config_scan_rsp_data_raw(scan_data, scan_len);
     
     esp_ble_gap_start_advertising(&adv_params);
 
     started_ = true;
-    ESP_LOGI(TAG, "BLE Advertising started: %s (len=%d)", ble_adv_name, (int)adv_len);
+    ESP_LOGI(TAG, "BLE Advertising started: %s (adv=%d, scan=%d)", ble_adv_name, (int)adv_len, (int)scan_len);
     return true;
 }
 

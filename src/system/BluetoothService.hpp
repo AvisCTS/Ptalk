@@ -25,6 +25,8 @@ public:
         uint8_t brightness = 100;
         std::string ssid;
         std::string pass;
+        
+        ConfigData() = default;
     };
 
     using OnConfigComplete = std::function<void(const ConfigData &)>;
@@ -33,7 +35,8 @@ public:
     ~BluetoothService();
 
     // Initialize BLE stack, cache networks for listing, and prepare GATT service; returns false on init failure.
-    bool init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks = {});
+    // Optional current_config allows passing current device configuration to restore in BLE
+    bool init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks = {}, const ConfigData *current_config = nullptr);
 
     // Begin BLE advertising with the configured name; no-op if already started.
     bool start();

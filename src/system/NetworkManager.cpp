@@ -31,6 +31,12 @@ std::string getDeviceMacID()
 
 static const char *TAG = "NetworkManager";
 
+// Forward declarations for NVS storage utility functions
+static bool nmgr_save_u8(const char* key, uint8_t value);
+static bool nmgr_save_str(const char* key, const std::string& value);
+static uint8_t nmgr_load_u8(const char* key, uint8_t def_val);
+static std::string nmgr_load_str(const char* key, const char* def_val);
+
 NetworkManager::NetworkManager() = default;
 
 NetworkManager::~NetworkManager()
@@ -737,28 +743,35 @@ void NetworkManager::retryWifiThenBLE()
 
     ESP_LOGW(TAG, "WiFi unavailable after retry - switching to BLE config mode");
 
-    // 1. Scan networks FIRST (while WiFi is still running)
+    // 1. Disconnect first to stop STA from connecting
+    if (wifi)
+    {
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
+    }
+
+    // 2. Start STA and scan networks (no longer connecting, so scan will work)
     if (wifi)
     {
         wifi->ensureStaStarted();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for STA to be ready
 
         cached_networks = wifi->scanNetworks();
         ESP_LOGI(TAG, "Scanned and cached %d networks before BLE mode", cached_networks.size());
     }
 
-    // 2. Now STOP WiFi completely to free RF for BLE
+    // 3. Now STOP WiFi completely to free RF for BLE
     if (wifi)
     {
         wifi->disconnect();
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
         
         // Properly stop WiFi before deinit
         esp_wifi_stop();
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WiFi to stop
         
         esp_wifi_deinit();
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for deinit to complete
         
         ESP_LOGI(TAG, "WiFi fully stopped and deinitialized for BLE");
     }
@@ -776,7 +789,14 @@ void NetworkManager::startBLEConfigMode()
     {
         ESP_LOGW(TAG, "Start BLE Config Mode now (RAM should be free)");
         ESP_LOGI(TAG, "Passing %d cached networks to BLE service", cached_networks.size());
-        ble_service->init(config_.ap_ssid, cached_networks);
+        
+        // Prepare current device configuration to restore in BLE
+        BluetoothService::ConfigData current_cfg;
+        current_cfg.device_name = nmgr_load_str("device_name", "PTalk");
+        current_cfg.volume = nmgr_load_u8("volume", 60);
+        current_cfg.brightness = nmgr_load_u8("brightness", 100);
+        
+        ble_service->init(config_.ap_ssid, cached_networks, &current_cfg);
         ble_service->start();
     }
 }
