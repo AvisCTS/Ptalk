@@ -80,13 +80,14 @@ bool BluetoothService::start()
     if (started_)
         return true;
 
-    esp_ble_adv_params_t adv_params = {};
-    adv_params.adv_int_min = 0x20;
-    adv_params.adv_int_max = 0x40;
-    adv_params.adv_type = ADV_TYPE_IND;
-    adv_params.own_addr_type = BLE_ADDR_TYPE_PUBLIC;
-    adv_params.channel_map = ADV_CHNL_ALL;
-    adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
+    // Prepare and save advertising params for restart after disconnect
+    adv_params_ = {};
+    adv_params_.adv_int_min = 0x20;
+    adv_params_.adv_int_max = 0x40;
+    adv_params_.adv_type = ADV_TYPE_IND;
+    adv_params_.own_addr_type = BLE_ADDR_TYPE_PUBLIC;
+    adv_params_.channel_map = ADV_CHNL_ALL;
+    adv_params_.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
 
     const char* ble_adv_name = "PTalk";
     esp_ble_gap_set_device_name(ble_adv_name);
@@ -113,7 +114,7 @@ bool BluetoothService::start()
     esp_ble_gap_config_adv_data_raw(adv_data, adv_len);
     esp_ble_gap_config_scan_rsp_data_raw(scan_data, scan_len);
     
-    esp_ble_gap_start_advertising(&adv_params);
+    esp_ble_gap_start_advertising(&adv_params_);
 
     started_ = true;
     ESP_LOGI(TAG, "BLE Advertising started: %s (adv=%d, scan=%d)", ble_adv_name, (int)adv_len, (int)scan_len);
@@ -192,6 +193,18 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
 
     case ESP_GATTS_CONNECT_EVT:
         s_instance->conn_id_ = param->connect.conn_id;
+        ESP_LOGI(TAG, "BLE Connected: conn_id=%d", param->connect.conn_id);
+        break;
+
+    case ESP_GATTS_DISCONNECT_EVT:
+        ESP_LOGI(TAG, "BLE Disconnected: conn_id=%d, reason=0x%x", 
+                 param->disconnect.conn_id, param->disconnect.reason);
+        // Restart advertising để có thể scan lại
+        if (s_instance->started_)
+        {
+            esp_ble_gap_start_advertising(&s_instance->adv_params_);
+            ESP_LOGI(TAG, "BLE Advertising restarted after disconnect");
+        }
         break;
 
     case ESP_GATTS_WRITE_EVT:

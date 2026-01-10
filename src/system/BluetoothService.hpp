@@ -90,4 +90,5 @@ private:
     std::vector<WifiInfo> wifi_networks_;  // Cached networks announced over BLE
     size_t wifi_read_index_ = 0;           // Streaming cursor for Wi‑Fi list reads
     uint16_t mtu_size_ = 23;               // Current BLE MTU (default 23, up to ~512)
+    esp_ble_adv_params_t adv_params_;      // Saved advertising params for restart
 };
