@@ -115,7 +115,10 @@ public:
     // ======================================================
     // Request firmware update; server should respond with binary firmware stream.
     // Optional version selects target; empty string requests latest. Returns false if WS not connected.
-    bool requestFirmwareUpdate(const std::string &version = "");
+    bool requestFirmwareUpdate(const std::string &version = "", uint32_t total_size = 0, const std::string &sha256 = "");
+
+    uint32_t getFirmwareExpectedSize() const { return firmware_expected_size; }
+    std::string getFirmwareExpectedChecksum() const { return firmware_expected_sha256; }
 
     // Register callback for incoming firmware data chunks during OTA.
     void onFirmwareChunk(std::function<void(const uint8_t *, size_t)> cb);
@@ -263,6 +266,8 @@ private:
     // OTA state
     bool firmware_download_active = false;
     uint32_t firmware_bytes_received = 0;
+    uint32_t firmware_expected_size = 0;
+    std::string firmware_expected_sha256;
 
     // WiFi retry state
     TaskHandle_t wifi_retry_task = nullptr;

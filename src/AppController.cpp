@@ -477,6 +477,12 @@ void AppController::processQueue()
                         }
                     }
                     ESP_LOGI(TAG, "Button Pressed -> Start Listening");
+                    // Interrupt any ongoing speaker output
+                    if (audio && StateManager::instance().getInteractionState() == state::InteractionState::SPEAKING)
+                    {
+                        ESP_LOGI(TAG, "Interrupting speaker for button press");
+                        audio->stopSpeaking();
+                    }
                     // Chuyển thẳng sang LISTENING (hoặc TRIGGERED nếu muốn có tiếng Beep trước)
                     StateManager::instance().setInteractionState(
                         state::InteractionState::LISTENING,
@@ -535,9 +541,26 @@ void AppController::processQueue()
                         // Request firmware from server
                         network->onFirmwareChunk([this](const uint8_t *data, size_t size)
                                                  {
-                                    if (ota) {
-                                        ota->writeChunk(data, size);
-                                    } });
+                                    if (!ota) return;
+
+                                    if (!ota->isUpdating()) {
+                                        uint32_t expected_size = network->getFirmwareExpectedSize();
+                                        std::string expected_sha = network->getFirmwareExpectedChecksum();
+
+                                        if (!ota->beginUpdate(expected_size, expected_sha)) {
+                                            ESP_LOGE(TAG, "OTA begin failed (size=%u)", expected_size);
+                                            StateManager::instance().setSystemState(state::SystemState::ERROR);
+                                            return;
+                                        }
+                                    }
+
+                                    int written = ota->writeChunk(data, size);
+                                    if (written < 0) {
+                                        ESP_LOGE(TAG, "OTA write failed, aborting");
+                                        ota->abortUpdate();
+                                        StateManager::instance().setSystemState(state::SystemState::ERROR);
+                                    }
+                                    });
 
                         network->onFirmwareComplete([this](bool success, const std::string &msg)
                                                     {
@@ -665,17 +688,19 @@ void AppController::onConnectivityStateChanged(state::ConnectivityState s)
     switch (s)
     {
     case state::ConnectivityState::OFFLINE:
+        // When offline, immediately stop any listening/speaking
         if (audio)
         {
-            // TODO: audio->stopStreaming();
+            audio->stopAll();
         }
+        // Ensure interaction returns to IDLE to avoid background capture
+        StateManager::instance().setInteractionState(
+            state::InteractionState::IDLE,
+            state::InputSource::UNKNOWN);
         break;
 
     case state::ConnectivityState::ONLINE:
-        if (audio)
-        {
-            // TODO: audio->readyForStream();
-        }
+        // No immediate audio action required; state-driven elsewhere
         break;
     case state::ConnectivityState::CONFIG_BLE:
         ESP_LOGW(TAG, "Config Mode: Cleaning up Audio to free ~72KB RAM...");
@@ -717,17 +742,25 @@ void AppController::onSystemStateChanged(state::SystemState s)
     switch (s)
     {
     case state::SystemState::ERROR:
+        // Halt audio paths on system error
         if (audio)
         {
-            // TODO: audio->stopAll();
+            audio->stopAll();
         }
+        StateManager::instance().setInteractionState(
+            state::InteractionState::IDLE,
+            state::InputSource::UNKNOWN);
         break;
 
     case state::SystemState::UPDATING_FIRMWARE:
+        // Ensure audio is stopped during OTA
         if (audio)
         {
-            // TODO: audio->stopAll();
+            audio->stopAll();
         }
+        StateManager::instance().setInteractionState(
+            state::InteractionState::IDLE,
+            state::InputSource::UNKNOWN);
         break;
 
     case state::SystemState::BOOTING:

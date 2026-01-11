@@ -608,7 +608,7 @@ void NetworkManager::handleInteractionState(state::InteractionState s)
 // ============================================================================
 // OTA FIRMWARE UPDATE SUPPORT
 // ============================================================================
-bool NetworkManager::requestFirmwareUpdate(const std::string &version)
+bool NetworkManager::requestFirmwareUpdate(const std::string &version, uint32_t total_size, const std::string &sha256)
 {
     if (!ws || !ws->isConnected())
     {
@@ -618,12 +618,22 @@ bool NetworkManager::requestFirmwareUpdate(const std::string &version)
 
     firmware_download_active = true;
     firmware_bytes_received = 0;
+    firmware_expected_size = total_size;
+    firmware_expected_sha256 = sha256;
 
     // Create request message (JSON format)
     std::string request = "{\"action\":\"update_firmware\"";
     if (!version.empty())
     {
         request += ",\"version\":\"" + version + "\"";
+    }
+    if (total_size > 0)
+    {
+        request += ",\"size\":" + std::to_string(total_size);
+    }
+    if (!sha256.empty())
+    {
+        request += ",\"sha256\":\"" + sha256 + "\"";
     }
     request += "}";
 
@@ -1051,12 +1061,30 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
             version = ver_obj->valuestring;
         }
 
-        bool ok = requestFirmwareUpdate(version);
+        uint32_t fw_size = 0;
+        cJSON *size_obj = cJSON_GetObjectItem(root, "size");
+        if (size_obj && cJSON_IsNumber(size_obj))
+        {
+            fw_size = static_cast<uint32_t>(size_obj->valuedouble);
+        }
+
+        std::string fw_sha256;
+        cJSON *sha_obj = cJSON_GetObjectItem(root, "sha256");
+        if (sha_obj && sha_obj->valuestring)
+        {
+            fw_sha256 = sha_obj->valuestring;
+        }
+
+        bool ok = requestFirmwareUpdate(version, fw_size, fw_sha256);
 
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddStringToObject(resp, "status", ok ? "ok" : "error");
         if (!version.empty())
             cJSON_AddStringToObject(resp, "version", version.c_str());
+        if (fw_size > 0)
+            cJSON_AddNumberToObject(resp, "size", fw_size);
+        if (!fw_sha256.empty())
+            cJSON_AddStringToObject(resp, "sha256", fw_sha256.c_str());
         cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
         if (!ok)
             cJSON_AddStringToObject(resp, "message", "OTA request failed or WS not connected");
