@@ -36,7 +36,7 @@ public:
     void stop();
 
     // Lazily allocate buffers if init was skipped earlier; returns false on OOM.
-    bool allocateResources() ;
+    bool allocateResources();
 
     // Free stream buffers and stop any running tasks.
     void freeResources();
@@ -69,15 +69,6 @@ public:
 
     // Set speaker output volume (0-100%). Applies immediately if output present.
     void setVolume(uint8_t percent);
-
-private:
-    // ------------------------------------------------------------------------
-    // State callback
-    // ------------------------------------------------------------------------
-    // React to interaction state changes to start/stop listening and speaking.
-    void handleInteractionState(state::InteractionState s,
-                                state::InputSource src);
-
     // ------------------------------------------------------------------------
     // Audio actions
     // ------------------------------------------------------------------------
@@ -87,6 +78,8 @@ private:
     // Temporarily halt capture without clearing buffers.
     void pauseListening();
 
+    // Convenience to stop both capture and playback.
+    void stopAll();
     // Fully stop capture and mark listening false.
     void stopListening();
 
@@ -96,8 +89,13 @@ private:
     // Stop speaking path and halt speaker playback if active.
     void stopSpeaking();
 
-    // Convenience to stop both capture and playback.
-    void stopAll();
+private:
+    // ------------------------------------------------------------------------
+    // State callback
+    // ------------------------------------------------------------------------
+    // React to interaction state changes to start/stop listening and speaking.
+    void handleInteractionState(state::InteractionState s,
+                                state::InputSource src);
 
 private:
     // ------------------------------------------------------------------------
@@ -121,7 +119,6 @@ private:
     std::atomic<bool> listening{false};
     std::atomic<bool> speaking{false};
     std::atomic<bool> power_saving{false};
-    std::atomic<bool> spk_playing{false};
 
     state::InputSource current_source = state::InputSource::UNKNOWN;
 
@@ -140,8 +137,7 @@ private:
     StreamBufferHandle_t sb_spk_pcm;     // PCM to speaker
     StreamBufferHandle_t sb_spk_encoded; // Encoded downlink
 
-    // PCM decode buffer (static allocation to avoid heap alloc in task)
-    int16_t spk_pcm_buffer[4096] = {};
+    // PCM decode buffer removed; speaker task manages its own chunk buffer
 
     // ------------------------------------------------------------------------
     // Tasks

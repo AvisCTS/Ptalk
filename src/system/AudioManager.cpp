@@ -321,6 +321,16 @@ void AudioManager::stopListening()
     listening = false;
 
     input->stopCapture();
+
+    // Clear pending mic data immediately to avoid residual uplink
+    if (sb_mic_pcm)
+        xStreamBufferReset(sb_mic_pcm);
+    if (sb_mic_encoded)
+        xStreamBufferReset(sb_mic_encoded);
+
+    // Reset codec so next session starts clean
+    if (codec)
+        codec->reset();
 }
 
 void AudioManager::startSpeaking()
@@ -340,11 +350,19 @@ void AudioManager::stopSpeaking()
         return;
     ESP_LOGI(TAG, "Stop speaking");
     speaking = false;
-    if (spk_playing)
-    {
+    // Stop I2S playback unconditionally; underlying driver tracks running state
+    if (output)
         output->stopPlayback();
-        spk_playing = false;
-    }
+
+    // Clear speaker buffers to drop any stale frames
+    if (sb_spk_encoded)
+        xStreamBufferReset(sb_spk_encoded);
+    if (sb_spk_pcm)
+        xStreamBufferReset(sb_spk_pcm);
+
+    // Reset codec decode state for a fresh next session
+    if (codec)
+        codec->reset();
 }
 
 void AudioManager::stopAll()
