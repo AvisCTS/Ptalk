@@ -1,7 +1,9 @@
 #pragma once
 #include <memory>
 #include <functional>
+#include <string>
 #include "esp_ota_ops.h"
+#include "mbedtls/sha256.h"
 
 // OTAUpdater manages firmware update writes to the OTA partition, validates
 // the image, and reports progress. AppController orchestrates it; downloading
@@ -26,8 +28,8 @@ public:
     void stop();
 
     // ======= OTA Control =======
-    // Begin OTA update using the provided firmware buffer; returns false on invalid input or init failure.
-    bool beginUpdate(const uint8_t* data, size_t size);
+    // Begin OTA update. Requires total size (bytes) and optional expected SHA-256 (hex string).
+    bool beginUpdate(size_t total_size, const std::string &expected_sha256 = "");
 
     // Write a data chunk to OTA partition; returns bytes written or -1 on error.
     int writeChunk(const uint8_t* data, size_t size);
@@ -40,6 +42,8 @@ public:
 
     // ======= Status =======
     bool isUpdating() const { return updating; }
+    uint32_t getExpectedSize() const { return total_bytes; }
+    std::string getExpectedChecksum() const { return expected_sha256_hex; }
     uint32_t getBytesWritten() const { return bytes_written; }
     uint32_t getTotalBytes() const { return total_bytes; }
     // Get current progress percentage (0-100); returns 0 if not updating.
@@ -61,6 +65,12 @@ private:
     bool updating = false;
     uint32_t bytes_written = 0;
     uint32_t total_bytes = 0;
+    std::string expected_sha256_hex;
+    bool checksum_enabled = false;
+
+    // SHA-256 state
+    mbedtls_sha256_context sha_ctx;
+    bool sha_started = false;
 
     // ======= ESP32 OTA handle =======
     esp_ota_handle_t update_handle = 0;

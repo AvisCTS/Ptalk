@@ -2,6 +2,29 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_ota_ops.h"
+#include <algorithm>
+#include <cctype>
+
+// Helper: convert uint8_t digest to lowercase hex string
+static std::string toHexLower(const uint8_t *data, size_t len)
+{
+    static const char *hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i)
+    {
+        uint8_t b = data[i];
+        out.push_back(hex[b >> 4]);
+        out.push_back(hex[b & 0x0F]);
+    }
+    return out;
+}
+
+static std::string toLower(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
 
 static const char* TAG = "OTAUpdater";
 
@@ -18,26 +41,31 @@ void OTAUpdater::stop() {
     ESP_LOGI(TAG, "OTAUpdater stopped");
 }
 
-bool OTAUpdater::beginUpdate(const uint8_t* data, size_t size) {
-    if (!data || size == 0) {
-        ESP_LOGE(TAG, "Invalid firmware data");
+bool OTAUpdater::beginUpdate(size_t total_size, const std::string &expected_sha256)
+{
+    if (total_size == 0)
+    {
+        ESP_LOGE(TAG, "Invalid firmware size: 0");
         return false;
     }
 
-    if (updating) {
+    if (updating)
+    {
         ESP_LOGW(TAG, "Update already in progress");
         return false;
     }
 
     // Check storage space before starting update
-    if (!checkStorageSpace(size)) {
+    if (!checkStorageSpace(total_size))
+    {
         ESP_LOGE(TAG, "Insufficient storage space for firmware update");
         return false;
     }
 
     // Find next OTA partition
     update_partition = esp_ota_get_next_update_partition(nullptr);
-    if (!update_partition) {
+    if (!update_partition)
+    {
         ESP_LOGE(TAG, "No OTA partition found");
         return false;
     }
@@ -46,14 +74,27 @@ bool OTAUpdater::beginUpdate(const uint8_t* data, size_t size) {
 
     // Begin OTA update
     esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         return false;
     }
 
     updating = true;
     bytes_written = 0;
-    total_bytes = size;
+    total_bytes = total_size;
+
+    expected_sha256_hex = toLower(expected_sha256);
+    checksum_enabled = !expected_sha256_hex.empty();
+
+    // Init SHA-256 if needed
+    if (checksum_enabled)
+    {
+        mbedtls_sha256_init(&sha_ctx);
+        mbedtls_sha256_starts_ret(&sha_ctx, 0 /* is224 = 0 → SHA-256 */);
+        sha_started = true;
+        ESP_LOGI(TAG, "OTA checksum target: %s", expected_sha256_hex.c_str());
+    }
 
     ESP_LOGI(TAG, "OTA update started, total size: %u bytes", total_bytes);
     reportProgress();
@@ -61,40 +102,81 @@ bool OTAUpdater::beginUpdate(const uint8_t* data, size_t size) {
     return true;
 }
 
-int OTAUpdater::writeChunk(const uint8_t* data, size_t size) {
-    if (!data || size == 0 || !updating) {
+int OTAUpdater::writeChunk(const uint8_t *data, size_t size)
+{
+    if (!data || size == 0 || !updating)
+    {
         ESP_LOGE(TAG, "Invalid write: data=%p, size=%zu, updating=%d", data, size, updating);
         return -1;
     }
 
+    if (bytes_written + size > total_bytes)
+    {
+        ESP_LOGE(TAG, "Chunk overflow: written=%u, chunk=%zu, expected=%u", bytes_written, size, total_bytes);
+        return -1;
+    }
+
     esp_err_t err = esp_ota_write(update_handle, data, size);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
         return -1;
     }
 
     bytes_written += size;
+
+    if (checksum_enabled && sha_started)
+    {
+        mbedtls_sha256_update_ret(&sha_ctx, data, size);
+    }
+
     reportProgress();
 
     return size;
 }
 
-bool OTAUpdater::finishUpdate() {
-    if (!updating) {
+bool OTAUpdater::finishUpdate()
+{
+    if (!updating)
+    {
         ESP_LOGW(TAG, "No update in progress");
         return false;
     }
 
+    if (bytes_written != total_bytes)
+    {
+        ESP_LOGE(TAG, "Size mismatch: written=%u, expected=%u", bytes_written, total_bytes);
+        return false;
+    }
+
+    // Finalize checksum if enabled
+    if (checksum_enabled && sha_started)
+    {
+        uint8_t digest[32] = {0};
+        mbedtls_sha256_finish_ret(&sha_ctx, digest);
+        sha_started = false;
+        std::string actual = toHexLower(digest, sizeof(digest));
+        if (actual != expected_sha256_hex)
+        {
+            ESP_LOGE(TAG, "Checksum mismatch. expected=%s actual=%s", expected_sha256_hex.c_str(), actual.c_str());
+            updating = false;
+            return false;
+        }
+        ESP_LOGI(TAG, "Checksum OK: %s", actual.c_str());
+    }
+
     // End OTA update
     esp_err_t err = esp_ota_end(update_handle);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
         updating = false;
         return false;
     }
 
     // Validate firmware
-    if (!validateFirmware()) {
+    if (!validateFirmware())
+    {
         ESP_LOGE(TAG, "Firmware validation failed");
         updating = false;
         return false;
@@ -102,7 +184,8 @@ bool OTAUpdater::finishUpdate() {
 
     // Set boot partition
     err = esp_ota_set_boot_partition(update_partition);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
         updating = false;
         return false;
@@ -111,16 +194,31 @@ bool OTAUpdater::finishUpdate() {
     ESP_LOGI(TAG, "OTA update finished successfully");
     updating = false;
 
+    if (sha_started)
+    {
+        mbedtls_sha256_free(&sha_ctx);
+        sha_started = false;
+    }
+
     return true;
 }
 
-void OTAUpdater::abortUpdate() {
-    if (updating) {
+void OTAUpdater::abortUpdate()
+{
+    if (updating)
+    {
         ESP_LOGW(TAG, "Aborting OTA update");
         esp_ota_abort(update_handle);
-        updating = false;
-        bytes_written = 0;
-        total_bytes = 0;
+    }
+    updating = false;
+    bytes_written = 0;
+    total_bytes = 0;
+    expected_sha256_hex.clear();
+    checksum_enabled = false;
+    if (sha_started)
+    {
+        mbedtls_sha256_free(&sha_ctx);
+        sha_started = false;
     }
 }
 
