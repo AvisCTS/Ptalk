@@ -225,7 +225,7 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
     uint16_t h = param->write.handle;
     uint8_t *v = param->write.value;
     uint16_t l = param->write.len;
-
+    ESP_LOGI(TAG, "Handle write: handle=0x%04x, len=%d", h, l);
     if (h == char_handles[0])
         temp_cfg_.device_name.assign((char *)v, l);
     else if (h == char_handles[1])
@@ -252,6 +252,7 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
 {
     esp_gatt_rsp_t rsp = {};
     rsp.attr_value.handle = param->read.handle;
+    ESP_LOGI(TAG, "Handle read: handle=0x%04x, offset=%d", param->read.handle, param->read.offset);
     // UUID DEVICE_NAME
     if (param->read.handle == char_handles[0])
     {
