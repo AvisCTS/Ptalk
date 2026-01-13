@@ -172,13 +172,15 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
         add_c(CHR_UUID_SAVE_CMD, ESP_GATT_CHAR_PROP_BIT_WRITE);
         add_c(CHR_UUID_DEVICE_ID, ESP_GATT_CHAR_PROP_BIT_READ);
         add_c(CHR_UUID_WIFI_LIST, ESP_GATT_CHAR_PROP_BIT_READ);
+        // New: WebSocket URL characteristic (read/write)
+        add_c(CHR_UUID_WS_URL, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
         break;
     }
 
     case ESP_GATTS_ADD_CHAR_EVT:
     {
         static int char_idx = 0;
-        if (char_idx < 10)
+        if (char_idx < 11)
             s_instance->char_handles[char_idx++] = param->add_char.attr_handle;
         break;
     }
@@ -193,11 +195,15 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
 
     case ESP_GATTS_CONNECT_EVT:
         s_instance->conn_id_ = param->connect.conn_id;
-        ESP_LOGI(TAG, "BLE Connected: conn_id=%d", param->connect.conn_id);
+        // Reset WS URL auth on new connection
+        s_instance->ws_url_unlocked_ = false;
+        ESP_LOGI(TAG, "BLE Connected: conn_id=%d (ws_url_auth=OFF)", param->connect.conn_id);
         break;
 
     case ESP_GATTS_DISCONNECT_EVT:
-        ESP_LOGI(TAG, "BLE Disconnected: conn_id=%d, reason=0x%x", 
+        // Reset ws_url auth on disconnect
+        s_instance->ws_url_unlocked_ = false;
+        ESP_LOGI(TAG, "BLE Disconnected: conn_id=%d, reason=0x%x (ws_url_auth reset)", 
                  param->disconnect.conn_id, param->disconnect.reason);
         // Restart advertising để có thể scan lại
         if (s_instance->started_)
@@ -236,6 +242,27 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
         temp_cfg_.ssid.assign((char *)v, l);
     else if (h == char_handles[4])
         temp_cfg_.pass.assign((char *)v, l);
+    else if (h == char_handles[10])
+    {
+        // WS URL write requires prior auth token write; if not unlocked, treat this write as token attempt
+        if (!ws_url_unlocked_)
+        {
+            std::string token(reinterpret_cast<char *>(v), reinterpret_cast<char *>(v) + l);
+            if (token == WS_URL_AUTH_TOKEN)
+            {
+                ws_url_unlocked_ = true;
+                ESP_LOGI(TAG, "WS URL auth unlocked by token");
+            }
+            else
+            {
+                ESP_LOGW(TAG, "WS URL write blocked: invalid token. Send auth token first.");
+            }
+        }
+        else
+        {
+            temp_cfg_.ws_url.assign((char *)v, l);
+        }
+    }
     else if (h == char_handles[7])
     {
         if (l > 0 && v[0] == 0x01 && config_cb_)
@@ -328,6 +355,22 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
             // Reset index để client có thể request lại
             wifi_read_index_ = 0;
             ESP_LOGI(TAG, "WiFi list END, reset index");
+        }
+    }
+    // UUID CHR_UUID_WS_URL
+    else if (param->read.handle == char_handles[10])
+    {
+        if (!ws_url_unlocked_)
+        {
+            static const char locked_msg[] = "LOCKED";
+            rsp.attr_value.len = sizeof(locked_msg) - 1;
+            memcpy(rsp.attr_value.value, locked_msg, rsp.attr_value.len);
+        }
+        else
+        {
+            rsp.attr_value.len = temp_cfg_.ws_url.length();
+            if (rsp.attr_value.len > 0)
+                memcpy(rsp.attr_value.value, temp_cfg_.ws_url.c_str(), rsp.attr_value.len);
         }
     }
     

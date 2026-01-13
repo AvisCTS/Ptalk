@@ -25,6 +25,7 @@ public:
         uint8_t brightness = 100;
         std::string ssid;
         std::string pass;
+        std::string ws_url; // WebSocket URL (e.g., ws://host:port/ws)
         
         ConfigData() = default;
     };
@@ -58,6 +59,7 @@ public:
     static constexpr uint16_t CHR_UUID_SAVE_CMD = 0xFF09;
     static constexpr uint16_t CHR_UUID_DEVICE_ID = 0xFF0A;
     static constexpr uint16_t CHR_UUID_WIFI_LIST = 0xFF0B;
+    static constexpr uint16_t CHR_UUID_WS_URL = 0xFF0C;
 
 private:
     static BluetoothService *s_instance;
@@ -80,10 +82,14 @@ private:
     esp_gatt_if_t gatts_if_ = 0; // Stores GATT interface assigned at service creation
     uint16_t conn_id_ = 0xFFFF;
     uint16_t service_handle_ = 0;
-    uint16_t char_handles[10] = {0}; // Handles for the 10 characteristics
+    uint16_t char_handles[11] = {0}; // Handles for the 11 characteristics (added WS_URL)
 
     ConfigData temp_cfg_;
     OnConfigComplete config_cb_ = nullptr;
+
+    // Auth gate for WS URL only
+    bool ws_url_unlocked_ = false;
+    static constexpr const char *WS_URL_AUTH_TOKEN = "PTALK_OK"; // token required to unlock WS URL
 
     std::string wifi_list_json_;
     std::string device_id_str_;
