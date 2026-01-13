@@ -445,8 +445,15 @@ bool DeviceProfile::setup(AppController &app)
     network_mgr->onServerBinary([spk_sb, network_ptr](const uint8_t *data, size_t len)
                                 {
         if (!data || len == 0) return;
-        if (StateManager::instance().getInteractionState() == state::InteractionState::LISTENING) {
-            return; 
+        auto interaction = StateManager::instance().getInteractionState();
+        // Only accept downlink audio when a speaking session is active
+        if (interaction == state::InteractionState::LISTENING || !network_ptr->isSpeakingSessionActive()) {
+            static uint32_t ignored = 0;
+            if (++ignored % 10 == 0) {
+                ESP_LOGW("Network", "Ignoring audio binary (state=%d, speaking_session=%d)",
+                         static_cast<int>(interaction), network_ptr->isSpeakingSessionActive());
+            }
+            return;
         }
         // Feed encoded data to AudioManager's downlink buffer
         size_t written = xStreamBufferSend(spk_sb, data, len, pdMS_TO_TICKS(100));
@@ -456,14 +463,7 @@ bool DeviceProfile::setup(AppController &app)
                 ESP_LOGW("Network", "ADPCM buffer full! Dropped %zu bytes (wanted %zu)", len - written, len);
             }
         }
-
-        // Set SPEAKING only ONCE per TTS session (prevent state spam)
-        if (!network_ptr->isSpeakingSessionActive()) {
-            network_ptr->startSpeakingSession();
-            auto& sm = StateManager::instance();
-            sm.setInteractionState(state::InteractionState::SPEAKING,
-                                   state::InputSource::SERVER_COMMAND);
-        } });
+        });
 
     // Handle WS disconnect - must cleanup to unblock speaker task
     network_mgr->onDisconnect([spk_sb, audio_ptr]()
@@ -489,6 +489,13 @@ bool DeviceProfile::setup(AppController &app)
         if (msg == "PROCESSING_START" || msg == "PROCESSING") {
             sm.setInteractionState(state::InteractionState::PROCESSING,
                                    state::InputSource::SERVER_COMMAND);
+        } else if (msg == "AUDIO_START") {
+            // Server explicitly starts audio; enter speaking state once per session
+            if (!network_ptr->isSpeakingSessionActive()) {
+                network_ptr->startSpeakingSession();
+                sm.setInteractionState(state::InteractionState::SPEAKING,
+                                       state::InputSource::SERVER_COMMAND);
+            }
         // } else if (msg == "LISTENING") {
         //     sm.setInteractionState(state::InteractionState::LISTENING,
         //                            state::InputSource::SERVER_COMMAND);
