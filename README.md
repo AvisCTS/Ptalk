@@ -1,292 +1,400 @@
-# PTalk - ESP32 Voice Assistant Firmware
+# PTalk - Trợ Lý Giọng Nói ESP32
 
-A modular, event-driven firmware for ESP32-based voice assistant devices with WiFi connectivity, audio I/O, display management, and power optimization.
+Firmware modular, hướng sự kiện cho thiết bị trợ lý giọng nói dựa trên ESP32 với kết nối WiFi, xử lý âm thanh I/O, quản lý màn hình và tối ưu hóa năng lượng.
 
-## 🎯 Features
+## 🎯 Tính Năng Chính
 
-- **Voice Input/Output**: I2S-based audio capture (INMP441 mic) and playback (MAX98357 speaker)
-- **Audio Codecs**: Support for ADPCM and Opus compression
-- **Display Management**: ST7789 display driver with animation support, direct rendering via AnimationPlayer (no framebuffer)
-- **Network Connectivity**: WiFi and WebSocket client integration
-- **Emotion System**: Server-driven emotion codes (WebSocket → `NetworkManager::parseEmotionCode()` → `StateManager` → Display)
-- **Power Management**: Battery monitoring with ADC, TP4056 charging detection
-- **State Management**: Central event hub with publish-subscribe pattern
-- **Multi-threaded**: FreeRTOS task-based architecture
-- **Modular Design**: Clean separation between hardware drivers and application logic
+- **Voice Input/Output**: Ghi âm I2S (mic INMP441) và phát âm thanh (loa MAX98357)
+- **Audio Codecs**: Hỗ trợ nén ADPCM và Opus
+- **Display Management**: Driver màn hình ST7789 với hệ thống animation, render trực tiếp qua AnimationPlayer (không dùng framebuffer)
+- **Network Connectivity**: Tích hợp WiFi và WebSocket client
+- **Emotion System**: Hệ thống cảm xúc điều khiển từ server (WebSocket → `NetworkManager::parseEmotionCode()` → `StateManager` → Display)
+- **Power Management**: Giám sát pin qua ADC, phát hiện sạc TP4056
+- **State Management**: Event hub trung tâm với pattern publish-subscribe thread-safe
+- **Multi-threaded**: Kiến trúc đa luồng FreeRTOS
+- **Modular Design**: Tách biệt rõ ràng giữa hardware drivers và application logic
+- **OTA Update**: Hỗ trợ cập nhật firmware 
+- **WebSocket Configuration**: Cấu hình động qua WebSocket (xem docs/WEBSOCKET_CONFIG_*)
 
-## 📋 System Requirements
+## 📋 Yêu Cầu Hệ Thống
 
 - **Platform**: ESP32 (ESP-IDF framework)
-- **Framework**: ESP-IDF with C++17 support
+- **Framework**: ESP-IDF với C++17
 - **Build Tool**: PlatformIO
 - **Monitor Speed**: 115200 baud
+- **Flash Size**: 16MB (hỗ trợ OTA)
 
-## 🏗️ Architecture Overview
+## 🏗️ Tổng Quan Kiến Trúc
 
-PTalk follows a layered, event-driven architecture:
+PTalk tuân theo kiến trúc phân lớp, hướng sự kiện:
 
 ```
-AppController (Orchestrator)
+AppController (Bộ Điều Phối Trung Tâm)
         ↑
-    StateManager (Event Hub)
+    StateManager (Event Hub - Thread-safe)
         ↑
    Managers (Business Logic)
-   ├── AudioManager
-   ├── DisplayManager
-   ├── NetworkManager
-   └── PowerManager
+   ├── AudioManager       - Quản lý capture/playback
+   ├── DisplayManager     - Quản lý UI/animations (subscribe state trực tiếp)
+   ├── NetworkManager     - WiFi + WebSocket + OTA streaming
+   ├── PowerManager       - Giám sát pin, publish PowerState
+   └── OTAUpdater         - Ghi/validate firmware chunks
         ↑
     Drivers (Hardware Abstraction)
+   ├── I2SAudioInput_INMP441
+   ├── I2SAudioOutput_MAX98357
+   ├── DisplayDriver (ST7789)
+   ├── TouchInput
+   └── Power (ADC, GPIO)
         ↑
-    Hardware (MCU peripherals)
+    Hardware (ESP32 peripherals)
 ```
 
 ### Core Components
 
-| Component | Responsibility |
-|-----------|---|
-| **AppController** | Central coordinator, translates state & events to actions |
-| **StateManager** | Event hub with publish-subscribe for state changes |
-| **AudioManager** | Manages microphone capture and speaker playback |
-| **DisplayManager** | Controls ST7789 display with animations |
-| **NetworkManager** | Handles WiFi and WebSocket connectivity |
-| **PowerManager** | Battery monitoring and power strategy |
+| Component | Trách Nhiệm |
+|-----------|-------------|
+| **AppController** | Bộ điều phối trung tâm, xử lý AppEvent qua hàng đợi FreeRTOS, điều khiển control logic |
+| **StateManager** | Event hub thread-safe với publish-subscribe pattern, quản lý tất cả state changes |
+| **AudioManager** | Quản lý capture/playback audio, codec pipeline, stream buffer |
+| **DisplayManager** | Điều khiển màn hình ST7789, animations, subscribe state để cập nhật UI tự động |
+| **NetworkManager** | WiFi, WebSocket, retry/portal logic, OTA streaming |
+| **PowerManager** | Giám sát ADC pin, smoothing %, publish PowerState |
 
-## 📁 Project Structure
+## 📁 Cấu Trúc Dự Án
 
 ```
 PTalk/
 ├── src/
-│   ├── main.cpp                      # Entry point
-│   ├── AppController.cpp/hpp         # Main orchestrator
-│   ├── Version.hpp                   # App version metadata
-│   ├── config/                       # DeviceProfile and board wiring
-│   │   ├── DeviceProfile.cpp/hpp
-│   ├── assets/                       # Compiled C++ assets (icons, emotions)
+│   ├── main.cpp                      # Entry point, khởi tạo AppController
+│   ├── AppController.cpp/hpp         # Orchestrator chính, xử lý AppEvent
+│   ├── Version.hpp                   # Metadata: APP_VERSION, DEVICE_MODEL, BUILD_DATE
+│   ├── config/
+│   │   ├── DeviceProfile.cpp/hpp     # Dependency injection, wiring managers/drivers
+│   ├── assets/                       # Compiled C++ assets
+│   │   ├── emotions/                 # Animation emotion (RLE-encoded)
+│   │   │   ├── neutral.cpp/hpp
+│   │   │   ├── idle.cpp/hpp
+│   │   │   ├── listening.cpp/hpp
+│   │   │   ├── happy.cpp/hpp
+│   │   │   ├── sad.cpp/hpp
+│   │   │   ├── thinking.cpp/hpp
+│   │   │   └── stun.cpp/hpp
+│   │   └── icons/                    # Icon assets (battery, charging, etc.)
 │   ├── system/
-│   │   ├── StateManager.cpp/hpp      # Central state hub
+│   │   ├── StateManager.cpp/hpp      # State hub (thread-safe)
 │   │   ├── StateTypes.hpp            # State enumerations
-│   │   ├── AudioManager.cpp/hpp      # Audio logic
-│   │   ├── DisplayManager.cpp/hpp    # Display logic
-│   │   ├── NetworkManager.cpp/hpp    # Network logic
-│   │   ├── PowerManager.cpp/hpp      # Power logic
-│   │   ├── OTAUpdater.cpp/hpp        # OTA support
+│   │   ├── AudioManager.cpp/hpp      # Audio logic, codec tasks
+│   │   ├── DisplayManager.cpp/hpp    # Display logic, animation playback
+│   │   ├── NetworkManager.cpp/hpp    # Network logic, emotion parsing
+│   │   ├── PowerManager.cpp/hpp      # Power monitoring
+│   │   ├── BluetoothService.cpp/hpp  # Bluetooth support
+│   │   └── OTAUpdater.cpp/hpp        # OTA firmware update
 │   └── CMakeLists.txt
 ├── lib/
 │   ├── audio/
 │   │   ├── AudioCodec.hpp            # Abstract codec interface
 │   │   ├── AudioInput.hpp/Output.hpp # Audio I/O abstractions
-│   │   ├── I2SAudioInput_INMP441     # INMP441 mic driver
-│   │   ├── I2SAudioOutput_MAX98357   # MAX98357 speaker driver
+│   │   ├── I2SAudioInput_INMP441.cpp/hpp   # INMP441 mic driver
+│   │   ├── I2SAudioOutput_MAX98357.cpp/hpp # MAX98357 speaker driver
 │   │   ├── AdpcmCodec.cpp/hpp        # ADPCM compression
 │   │   └── OpusCodec.cpp/hpp         # Opus compression
 │   ├── display/
 │   │   ├── DisplayDriver.cpp/hpp     # ST7789 low-level driver
-│   │   ├── AnimationPlayer.cpp/hpp   # Multi-frame animation engine
+│   │   ├── AnimationPlayer.cpp/hpp   # Multi-frame RLE animation engine
 │   │   └── Font8x8.hpp               # Bitmap font data
 │   ├── network/
 │   │   ├── WifiService.cpp/hpp       # WiFi connectivity
 │   │   ├── WebSocketClient.cpp/hpp   # WebSocket client
-│   │   └── web_page.hpp              # Web UI assets
-│   └── power/
-│       └── Power.cpp/hpp             # Power driver (ADC, GPIO)
+│   │   └── web_page.hpp              # Web UI assets (captive portal)
+│   ├── power/
+│   │   └── Power.cpp/hpp             # Power driver (ADC, GPIO)
+│   └── touch/
+│       └── TouchInput.cpp/hpp        # Touch/button input wrapper
+├── include/
+│   └── system/
+│       └── WSConfig.hpp              # WebSocket config protocol
 ├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── EMOTION_SYSTEM.md
-│   ├── EMOTION_REFACTOR_SUMMARY.md
-│   └── Software Architecture.md
+│   ├── ARCHITECTURE.md               # Kiến trúc chi tiết (đồng bộ với code)
+│   ├── EMOTION_SYSTEM.md             # Tài liệu hệ thống cảm xúc
+│   ├── WEBSOCKET_CONFIG_*.md         # Tài liệu cấu hình WebSocket
+│   └── Software_Architecture.md      # Kiến trúc phần mềm tổng quan
 ├── scripts/
+│   ├── convert_assets.py             # Convert images/GIFs thành C++ arrays
+│   ├── convert_gif.py                # Convert GIF thành RLE animation
+│   └── convert_logo.py               # Convert logo
 ├── server_test/
-├── CMakeLists.txt
-├── platformio.ini
-├── sdkconfig.esp32dev
+│   ├── dummy_server.py               # Server test WebSocket
+│   └── dummy_server_cmd.py           # Server test command line
+├── managed_components/               # ESP-IDF managed components
+│   └── espressif__esp_websocket_client/
+├── CMakeLists.txt                    # ESP-IDF build config
+├── platformio.ini                    # PlatformIO config
+├── partitions_16mb_ota.csv           # Partition table cho OTA
 └── README.md
 ```
 
-## 🔄 State Management
+## 🔄 State Management (Quản Lý Trạng Thái)
 
-The system uses a centralized state machine with the following state types:
+Hệ thống sử dụng state machine tập trung thread-safe với các loại state sau:
 
 ### Interaction State
-- `IDLE` - System ready, no activity
-- `TRIGGERED` - Input detected (button, wakeword, VAD)
-- `LISTENING` - Capturing audio from microphone
-- `PROCESSING` - Waiting for server/AI response
-- `SPEAKING` - Playing response audio
-- `CANCELLING` - User cancelled interaction
-- `MUTED` - Privacy mode (input disabled)
-- `SLEEPING` - Low power UX mode
+- `IDLE` - Hệ thống sẵn sàng, không hoạt động
+- `TRIGGERED` - Phát hiện input (nút, wakeword, VAD)
+- `LISTENING` - Đang ghi âm từ microphone
+- `PROCESSING` - Đang chờ phản hồi từ server/AI
+- `SPEAKING` - Đang phát âm thanh phản hồi
+- `CANCELLING` - User hủy tương tác
+- `MUTED` - Chế độ riêng tư (input disabled)
+- `SLEEPING` - Chế độ tiết kiệm năng lượng
 
 ### Connectivity State
-- `OFFLINE` - No WiFi connection
-- `CONNECTING_WIFI` - WiFi connection in progress
-- `WIFI_PORTAL` - AP mode for configuration
-- `CONNECTING_WS` - WebSocket connection in progress
-- `ONLINE` - Full connectivity established
+- `OFFLINE` - Không có kết nối WiFi
+- `CONNECTING_WIFI` - Đang kết nối WiFi
+- `WIFI_PORTAL` - Chế độ AP để cấu hình
+- `CONNECTING_WS` - Đang kết nối WebSocket
+- `ONLINE` - Kết nối đầy đủ
 
 ### Power State
-- `NORMAL` - Battery healthy
-- `CHARGING` - Device charging
-- `FULL_BATTERY` - Fully charged
-- `CRITICAL` - Battery critically low (auto deep sleep behavior)
-- `ERROR` - Battery fault/disconnected
+- `NORMAL` - Pin đầy đủ
+- `CHARGING` - Đang sạc
+- `FULL_BATTERY` - Sạc đầy
+- `CRITICAL` - Pin cực thấp (tự động deep sleep)
+- `ERROR` - Lỗi pin/ngắt kết nối
 
 ### System State
-- `BOOTING` - Initial startup
-- `RUNNING` - Normal operation
-- `ERROR` - System fault
-- `MAINTENANCE` - Service mode
-- `UPDATING_FIRMWARE` - OTA update in progress
-- `FACTORY_RESETTING` - Factory reset in progress
+- `BOOTING` - Khởi động
+- `RUNNING` - Hoạt động bình thường
+- `ERROR` - Lỗi hệ thống
+- `MAINTENANCE` - Chế độ bảo trì
+- `UPDATING_FIRMWARE` - Đang cập nhật OTA
+- `FACTORY_RESETTING` - Đang reset về cài đặt gốc
 
-## 🚀 Building and Flashing
+### Emotion State
+- `NEUTRAL` - Mặc định, không cảm xúc đặc biệt (Code: "00")
+- `HAPPY` - Vui vẻ, thân thiện (Code: "01")
+- `ANGRY` - Cảnh báo, khẩn cấp (Code: "02")
+- `EXCITED` - Ngạc nhiên, phấn khích (Code: "03")
+- `SAD` - Đồng cảm, quan tâm (Code: "10")
+- `CONFUSED` - Không chắc chắn, cần làm rõ (Code: "12")
+- `CALM` - Nhẹ nhàng, an tâm (Code: "13")
+- `THINKING` - Đang xử lý (Code: "99")
 
-### Prerequisites
+## 🚀 Build và Flash
+
+### Cài Đặt
 ```bash
-# Install PlatformIO
+# Cài PlatformIO
 pip install platformio
 
-# Ensure ESP-IDF is set up
-export IDF_PATH=/path/to/esp-idf
+# Cài ESP-IDF (nếu cần)
+# https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/
 ```
 
 ### Build
 ```bash
-# Build the project
+# Build project
 pio run -e esp32dev
 
-# Build and monitor serial output
+# Build và monitor
 pio run -e esp32dev -t monitor
 ```
 
 ### Upload
 ```bash
-# Upload to device
+# Upload lên thiết bị
 pio run -e esp32dev -t upload
 
-# Upload and open monitor
+# Upload và mở monitor
 pio run -e esp32dev -t uploadandmonitor
 ```
 
-## 🔧 Configuration
+## 🔧 Cấu Hình
 
-Edit config.h to configure:
-- Pin assignments for I2S, display, buttons
-- WiFi credentials
-- Audio buffer sizes
-- Display parameters
-- Power thresholds
+Cấu hình chính trong `src/config/DeviceProfile.cpp`:
+- **Pin assignments**: I2S, Display SPI, Touch, Power ADC
+- **WiFi credentials**: SSID, password (hoặc dùng captive portal)
+- **Audio buffer sizes**: Stream buffer sizes
+- **Display parameters**: Resolution, rotation
+- **Power thresholds**: Low battery, critical levels
 
-## 📡 Hardware Requirements
+## 📡 Yêu Cầu Phần Cứng
 
-### Required Components
-- **MCU**: ESP32 (30-pin or 36-pin module)
+### Linh Kiện Bắt Buộc
+- **MCU**: ESP32 DevKit (16MB flash khuyến nghị cho OTA)
 - **Microphone**: INMP441 (I2S digital audio)
 - **Speaker**: MAX98357 amplifier (I2S audio)
 - **Display**: ST7789 1.3" LCD (240x240, SPI)
-- **Battery**: Li-ion (3.7V nominal) with TP4056 charging circuit
-- **WiFi**: Built-in ESP32 WiFi (2.4GHz)
+- **Battery**: Li-ion 3.7V + TP4056 charging module
+- **WiFi**: Tích hợp sẵn ESP32 (2.4GHz)
 
-### Pin Mapping (Typical)
-Configure in config.h:
-- **I2S Audio**: BCLK, LRCLK, DIN (INMP441), DOUT (MAX98357)
-- **SPI Display**: MOSI, MISO, CLK, CS, DC, RST
-- **Power ADC**: ADC input for battery voltage
-- **Charging Detect**: GPIO for TP4056 CHRG/STDBY signals
-- **Buttons/Touch**: GPIO for user input
+### Pin Mapping
+Cấu hình trong `DeviceProfile.cpp`:
+- **I2S MIC (INMP441)**: BCLK, LRCLK, DIN
+- **I2S Speaker (MAX98357)**: BCLK, LRCLK, DOUT
+- **SPI Display (ST7789)**: MOSI, CLK, CS, DC, RST, BL
+- **Power**: ADC pin cho battery voltage, GPIO cho TP4056 signals
+- **Touch/Button**: GPIO cho user input
 
-## 📚 Module Details
+## 📚 Chi Tiết Modules
 
 ### Audio System
-- **Input**: INMP441 digital microphone via I2S
-- **Output**: MAX98357 class-D amplifier via I2S
-- **Codecs**: ADPCM (lower bandwidth) and Opus (better quality)
-- **Streaming**: Real-time audio capture/playback with codec support
+- **Input**: INMP441 digital microphone qua I2S
+- **Output**: MAX98357 class-D amplifier qua I2S
+- **Codecs**: ADPCM (bandwidth thấp) và Opus (chất lượng cao)
+- **Streaming**: Real-time capture/playback với codec support
+- **Tasks**: MicTask, CodecTask (core 0), SpkTask (core 1)
 
 ### Display System
-- **Driver**: ST7789 SPI interface
-- **Resolution**: 240x240 pixels
-- **Features**: Direct rendering (AnimationPlayer) — no framebuffer required, animation playback
-- **Animations**: RLE-encoded image sequences (see `scripts/convert_assets.py`) 
-- **Registered assets (DeviceProfile)**: `neutral`, `idle`, `listening`, `happy`, `sad`, `thinking`, `stun` (others may be added)
+- **Driver**: ST7789 SPI interface (240x240)
+- **AnimationPlayer**: Direct rendering, không dùng framebuffer
+- **Animations**: RLE-encoded sequences (xem `scripts/convert_assets.py`)
+- **Registered emotions**: neutral, idle, listening, happy, sad, thinking, stun
+- **Subscribe state**: DisplayManager tự động cập nhật UI khi state thay đổi
 
 ### Network System
 - **WiFi**: ESP32 native 802.11b/g/n (2.4GHz)
-- **WebSocket**: Persistent connection for bidirectional communication
-- **Web Portal**: Captive portal for WiFi provisioning
+- **WebSocket**: Persistent connection cho bidirectional communication
+- **Captive Portal**: AP mode để provisioning WiFi
+- **Retry Logic**: Tự động reconnect với backoff strategy
+- **OTA Streaming**: Nhận firmware chunks qua WebSocket
 
 ### Emotion System
-- **Flow**: Server sends 2-char emotion codes via WebSocket → `NetworkManager::parseEmotionCode()` → `StateManager::setEmotionState()` → `DisplayManager` plays animation
-- See `docs/EMOTION_SYSTEM.md` for details and mapping
+- **Flow**: Server gửi emotion code (2 chars) qua WebSocket → `NetworkManager::parseEmotionCode()` → `StateManager::setEmotionState()` → `DisplayManager` tự động play animation
+- **Mapping**: Xem `docs/EMOTION_SYSTEM.md` để biết chi tiết codes
+- **Thread-safe**: Callback được gọi ngoài lock để tránh deadlock
 
 ### Power System
-- **Battery Monitoring**: ADC-based voltage measurement
-- **Charging Detection**: TP4056 control signals (CHRG, STDBY)
-- **Sleep Modes**: Light sleep and deep sleep support
+- **Battery Monitoring**: ADC-based voltage measurement với smoothing
+- **Charging Detection**: TP4056 CHRG/STDBY signals
+- **Sleep Modes**: Light sleep và deep sleep (khi CRITICAL)
 - **Hysteresis**: Smooth battery percentage reporting
 
 ## 🧵 Threading Model
 
-- **Core 0**: FreeRTOS + WiFi driver, **Audio MIC & Codec tasks** (mic capture, codec decode/encode pinned to core 0)
-- **Core 1**: `AppControllerTask` (priority 4) - Main event loop; `DisplayLoop`/UI task (priority 3); `AudioSpkTask` (speaker playback pinned to core 1)
-- **NetworkLoop**: uses `tskNO_AFFINITY` (no fixed core)
+### Task Configuration
+| Task | Priority | Stack | Core | Ghi Chú |
+|------|----------|-------|------|---------|
+| AppControllerTask | 4 | 8KB | 1 | Main event loop |
+| DisplayLoop | 3 | 6KB | 1 | UI/animation rendering |
+| AudioSpkTask | 5 | 4KB | 1 | Speaker playback |
+| AudioMicTask | 5 | 4KB | 0 | Microphone capture |
+| AudioCodecTask | 4 | 8KB | 0 | Codec encode/decode |
+| NetworkLoop | 3 | 8KB | NO_AFFINITY | WiFi + WebSocket |
 
-Note: Task priorities and core pinning are set in `AppController::start()` / `AudioManager::start()` / `DisplayManager::startLoop()`.
+### Core Assignment
+- **Core 0**: WiFi driver, AudioMicTask, AudioCodecTask
+- **Core 1**: AppControllerTask, DisplayLoop, AudioSpkTask
 
 ## 🔌 Event Flow
 
+### State-driven (Reactive)
 ```
-Hardware Event
+Hardware Change
     ↓
-Driver detects state change
+Driver detects
     ↓
-Manager posts state to StateManager
+Manager calls StateManager.setXxx()
     ↓
-StateManager notifies all subscribers
+StateManager copies callbacks trong lock
     ↓
-AppController receives notification
+StateManager calls callbacks ngoài lock (thread-safe)
     ↓
-AppController orchestrates response
-    ↓
-Managers update hardware state
+AppController receives via queue (control logic)
+DisplayManager/AudioManager receive trực tiếp (UI/audio)
 ```
+
+### Event-driven (Deterministic)
+```
+User Action / System Event
+    ↓
+AppEvent posted to AppController::postEvent()
+    ↓
+AppControllerTask processes sequentially
+    ↓
+Map event → state/actions
+    ↓
+Update StateManager
+    ↓
+Propagate to subscribers
+```
+
+## 🔄 Lifecycle (Chu Trình Khởi Động)
+
+### Khởi Động (app_main → AppController::start)
+1. `AppController::init()` - Khởi tạo event queue
+2. **Tạo AppControllerTask** (core 1, priority 4) - Đảm bảo queue ready
+3. `PowerManager::start()` - Sample pin sớm
+4. `DisplayManager::startLoop()` - Hiển thị boot UI
+5. `NetworkManager::start()` - Kết nối WiFi/WebSocket
+6. `AudioManager::start()` - Khởi động audio pipeline
+7. `TouchInput::start()` - Kích hoạt input
+
+### Tắt (AppController::stop)
+Reverse order để tránh dangling references:
+1. `NetworkManager::stop()`
+2. `AudioManager::stop()`
+3. `DisplayManager::stopLoop()`
+4. `PowerManager::stop()`
 
 ## 📝 Implementation Notes
 
-### TODOs
-Current status / TODOs:
-- ✅ Audio capture and codec pipeline implemented (mic, codec, speaker tasks) — integrate end-to-end streaming tests
-- ✅ Audio playback control implemented via `AudioOutput` APIs
-- ✅ Emotion parsing (`NetworkManager::parseEmotionCode()`) and `DisplayManager` emotion handling implemented
-- ⚠️ Full OTA firmware update: partial support (OTAUpdater implemented, integration tests recommended)
-- ⚠️ Configuration management (NVS) — read/write helpers and UI to modify settings
-- ⚠️ Advanced touch/button input features and polish
-- ⚠️ Sleep/wake logic refinement and edge-case testing
-- ⚠️ Mute/unmute functionality (privacy mode) - supported in state but UI/UX polish recommended
+### Trạng Thái Hiện Tại
+- ✅ **Audio pipeline**: Mic → Codec → Speaker tasks hoạt động tốt
+- ✅ **Display system**: AnimationPlayer với RLE compression
+- ✅ **Emotion parsing**: NetworkManager → StateManager → DisplayManager
+- ✅ **State management**: Thread-safe publish-subscribe
+- ✅ **Power management**: ADC monitoring, TP4056 detection
+- ✅ **OTA Update**: OTAUpdater implemented, cần test integration
+- ✅ **WebSocket config**: Dynamic configuration protocol (xem docs/)
+- ⚠️ **NVS config**: Read/write helpers, cần UI để modify
+- ⚠️ **Touch input**: Basic support, cần polish UX
+- ⚠️ **Sleep/wake**: Logic implemented, cần test edge cases
 
 ### Code Style
-- C++17 with Modern C++ idioms
-- RAII for resource management
-- Smart pointers (`std::unique_ptr`) for memory safety
-- FreeRTOS for concurrency
-- No raw `new`/`delete`
+- **C++17**: Modern C++ idioms
+- **RAII**: Resource management
+- **Smart pointers**: `std::unique_ptr` cho memory safety
+- **FreeRTOS**: Task-based concurrency
+- **Thread-safe**: Mutex + copy callbacks pattern
+- **No raw new/delete**: Sử dụng smart pointers
 
-## 🐛 Known Issues
+## 🔧 Tool Scripts
 
-**Fixed**: Removed undefined `TouchInput` class reference that was causing compilation errors.
+### Convert Assets
+```bash
+# Convert icon
+python scripts/convert_assets.py icon battery.png src/assets/icons/
 
-See [Software Architecture.md](Software Architecture.md) for detailed architectural documentation.
+# Convert emotion (GIF → RLE animation)
+python scripts/convert_assets.py emotion happy.gif src/assets/emotions/ 20 true
+# Args: type, input, output_dir, fps, loop
+```
+
+## 🐛 Known Issues & Fixes
+
+- ✅ **Fixed**: Undefined TouchInput reference causing compilation errors
+- ✅ **Fixed**: DisplayManager animation race conditions
+- ⚠️ **Known**: Thỉnh thoảng WebSocket reconnect sau deep sleep cần thêm delay
+
+## 📖 Tài Liệu Thêm
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - Kiến trúc chi tiết đồng bộ với code
+- [`docs/EMOTION_SYSTEM.md`](docs/EMOTION_SYSTEM.md) - Hệ thống cảm xúc và emotion codes
+- [`docs/WEBSOCKET_CONFIG_*.md`](docs/) - Tài liệu cấu hình WebSocket
 
 ## 📄 License
 
-[Add your license here]
+[Thêm license tại đây]
 
 ## 👥 Contributors
 
-Trungnguyen
+**Trung Nguyen** - Core Developer
 
 ---
 
-**Status**: Development  
-**Last Updated**: December 2025
+**Phiên Bản**: v1.0.4  
+**Device Model**: PTalk-V1  
+**Trạng Thái**: Development (đang phát triển)  
+**Cập Nhật Cuối**: Tháng 1/2026
 ```
