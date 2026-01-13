@@ -805,6 +805,7 @@ void NetworkManager::startBLEConfigMode()
         current_cfg.device_name = nmgr_load_str("device_name", "PTalk");
         current_cfg.volume = nmgr_load_u8("volume", 60);
         current_cfg.brightness = nmgr_load_u8("brightness", 100);
+        current_cfg.ws_url = nmgr_load_str("ws_url", "");
         
         ble_service->init(config_.ap_ssid, cached_networks, &current_cfg);
         ble_service->start();
