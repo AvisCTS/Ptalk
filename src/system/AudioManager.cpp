@@ -340,6 +340,13 @@ void AudioManager::startSpeaking()
     ESP_LOGI(TAG, "Start speaking");
     speaking = true;
 
+    // Wake speaker task immediately (don't wait for 100ms idle timeout)
+    if (spk_task)
+    {
+        xTaskNotifyGive(spk_task);
+        ESP_LOGD(TAG, "Speaker task notified to wake up");
+    }
+
     // DO NOT reset codec here - it breaks ADPCM predictor continuity
     // Only reset when switching to a completely new audio stream/session
 }
@@ -522,6 +529,7 @@ void AudioManager::codecTaskLoop()
             {
                 codec->reset();
                 new_decode_session = false;
+                ESP_LOGI(TAG, "Codec: New decode session started");
             }
 
             size_t out_samples = codec->decode(
@@ -532,12 +540,21 @@ void AudioManager::codecTaskLoop()
 
             if (out_samples > 0)
             {
-                xStreamBufferSend(
+                size_t written = xStreamBufferSend(
                     sb_spk_pcm,
                     reinterpret_cast<uint8_t *>(pcm_out),
                     out_samples * sizeof(int16_t),
-                    portMAX_DELAY);
+                    pdMS_TO_TICKS(1000));
+                if (written != out_samples * sizeof(int16_t))
+                {
+                    ESP_LOGW(TAG, "Codec: SPK buffer full, dropped %zu bytes", 
+                             out_samples * sizeof(int16_t) - written);
+                }
             }
+        }
+        else if (got > 0)
+        {
+            ESP_LOGW(TAG, "Codec: Got partial ADPCM %zu/%zu bytes", got, sizeof(encoded));
         }
     }
 
@@ -552,36 +569,54 @@ void AudioManager::codecTaskLoop()
 // ============================================================================
 void AudioManager::spkTaskLoop()
 {
+    ESP_LOGI(TAG, "Speaker task started");
+    
     constexpr size_t PCM_CHUNK_SAMPLES = 1024;
     constexpr size_t PCM_CHUNK_BYTES =
         PCM_CHUNK_SAMPLES * sizeof(int16_t);
 
     int16_t pcm_chunk[PCM_CHUNK_SAMPLES];
     bool i2s_started = false;
+    uint32_t timeout_count = 0;
 
     while (started)
     {
+        // When not speaking, idle but stay alive for next session
         if (!speaking || power_saving)
         {
             if (i2s_started)
             {
+                ESP_LOGI(TAG, "Speaker: Stopping I2S (speaking=%d, power_saving=%d)", 
+                         speaking.load(), power_saving.load());
                 output->stopPlayback();
                 i2s_started = false;
+                timeout_count = 0;
             }
-            vTaskDelay(pdMS_TO_TICKS(10));
+            // Idle: wait for notification or timeout (100ms max) - allows quick wake-up when speaking starts
+            uint32_t notified = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(100));
+            if (notified)
+            {
+                ESP_LOGD(TAG, "Speaker: Woken by notification");
+            }
             continue;
         }
 
+        // Now speaking=true, try to start I2S if not already
         if (!i2s_started)
         {
+            ESP_LOGI(TAG, "Speaker: Attempting startPlayback()...");
             if (!output->startPlayback())
             {
+                ESP_LOGW(TAG, "Speaker: startPlayback() failed, retrying...");
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
             i2s_started = true;
+            timeout_count = 0;
+            ESP_LOGI(TAG, "Speaker: I2S playback started");
         }
 
+        // Read PCM from buffer and play
         size_t got = xStreamBufferReceive(
             sb_spk_pcm,
             reinterpret_cast<uint8_t *>(pcm_chunk),
@@ -590,12 +625,32 @@ void AudioManager::spkTaskLoop()
 
         if (got == PCM_CHUNK_BYTES)
         {
+            timeout_count = 0;
             output->writePcm(pcm_chunk, PCM_CHUNK_SAMPLES);
+        }
+        else if (got > 0)
+        {
+            // Partial data
+            ESP_LOGW(TAG, "Speaker: Got partial PCM data %zu/%zu bytes", got, PCM_CHUNK_BYTES);
+            timeout_count = 0;
+        }
+        else
+        {
+            // No data (timeout)
+            timeout_count++;
+            if (timeout_count % 5 == 0)
+            {
+                ESP_LOGD(TAG, "Speaker: Waiting for PCM data (timeout_count=%u)", timeout_count);
+            }
         }
     }
 
+    // Cleanup on manager stop
     if (i2s_started)
+    {
+        ESP_LOGI(TAG, "Speaker: Cleaning up I2S before exit");
         output->stopPlayback();
+    }
 
     ESP_LOGW(TAG, "Speaker task ended");
     vTaskDelete(nullptr);
