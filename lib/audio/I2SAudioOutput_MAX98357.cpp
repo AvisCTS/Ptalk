@@ -126,7 +126,7 @@ size_t I2SAudioOutput_MAX98357::writePcm(const int16_t* pcm, size_t pcm_samples)
         scaled,
         pcm_samples * sizeof(int16_t),
         &bytes_written,
-        portMAX_DELAY
+        pdMS_TO_TICKS(50)  // 50ms timeout to allow task responsiveness instead of blocking indefinitely
     );
 
     return bytes_written / sizeof(int16_t); // trả về số sample
