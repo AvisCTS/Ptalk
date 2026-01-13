@@ -203,6 +203,7 @@ namespace user_cfg
         uint8_t brightness = 100; // 0-100 %
         std::string wifi_ssid;
         std::string wifi_pass;
+        std::string ws_url; // Stored WS URL (may be full URL or host:port)
     };
 
     static std::string get_string(nvs_handle_t h, const char *key)
@@ -245,6 +246,9 @@ namespace user_cfg
         cfg.wifi_ssid = get_string(h, "ssid");
         cfg.wifi_pass = get_string(h, "pass");
 
+        // Optional WS URL override
+        cfg.ws_url = get_string(h, "ws_url");
+
         cfg.volume = get_u8(h, "volume", cfg.volume);
         cfg.brightness = get_u8(h, "brightness", cfg.brightness);
 
@@ -263,6 +267,8 @@ namespace user_cfg
                 nvs_set_str(h, "ssid", data.ssid.c_str());
             if (!data.pass.empty())
                 nvs_set_str(h, "pass", data.pass.c_str());
+            if (!data.ws_url.empty())
+                nvs_set_str(h, "ws_url", data.ws_url.c_str());
 
             nvs_set_u8(h, "volume", data.volume);
             nvs_set_u8(h, "brightness", data.brightness);
@@ -415,10 +421,42 @@ bool DeviceProfile::setup(AppController &app)
     net_cfg.ap_ssid = "PTalk-Portal"; // SSID hiển thị khi mở portal
     net_cfg.ap_max_clients = 4;       // Số thiết bị tối đa kết nối vào portal
 
-    // Đặt địa chỉ IP và port của WebSocket server (ví dụ: 192.168.1.100:8080)
-    // Thêm path nếu server yêu cầu, ví dụ: ws://171.226.10.121:8000/ws
-    // Uvicorn/FastAPI thường khai báo endpoint WebSocket tại "/ws".
-    net_cfg.ws_url = "ws://171.226.10.121:8000/ws";
+    // Xác định WS URL: ưu tiên lấy từ NVS; nếu trống dùng mặc định "171.226.10.121:8000"
+    auto normalize_ws_url = [](std::string val) -> std::string {
+        // Trim spaces
+        auto trim = [](std::string &s){
+            while (!s.empty() && (s.front()==' '||s.front()=='\t'||s.front()=='\n'||s.front()=='\r')) s.erase(s.begin());
+            while (!s.empty() && (s.back()==' '||s.back()=='\t'||s.back()=='\n'||s.back()=='\r')) s.pop_back();
+        };
+        trim(val);
+        if (val.empty()) return std::string();
+        // Already a ws(s):// URL
+        if (val.rfind("ws://", 0) == 0 || val.rfind("wss://", 0) == 0) {
+            // Ensure it has a path; if missing, append /ws
+            auto pos_slash = val.find('/', val.find("://") + 3);
+            if (pos_slash == std::string::npos) val += "/ws";
+            return val;
+        }
+        // Convert http(s):// to ws(s)://
+        if (val.rfind("http://", 0) == 0) {
+            val.replace(0, 7, "ws://");
+            auto pos_slash = val.find('/', val.find("://") + 3);
+            if (pos_slash == std::string::npos) val += "/ws";
+            return val;
+        }
+        if (val.rfind("https://", 0) == 0) {
+            val.replace(0, 8, "wss://");
+            auto pos_slash = val.find('/', val.find("://") + 3);
+            if (pos_slash == std::string::npos) val += "/ws";
+            return val;
+        }
+        // Assume host:port → prepend ws:// and append /ws
+        return std::string("ws://") + val + "/ws";
+    };
+
+    const std::string default_hostport = "171.226.10.121:8000";
+    std::string chosen = user.ws_url.empty() ? default_hostport : user.ws_url;
+    net_cfg.ws_url = normalize_ws_url(chosen);
 
     if (!network_mgr->init(net_cfg))
     {
