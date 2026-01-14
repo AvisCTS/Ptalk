@@ -3,6 +3,7 @@ import wave
 import os
 import sys
 import json
+import hashlib
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -111,6 +112,65 @@ def log(tag, msg):
 
 # Track the most recent/active WebSocket connection
 ACTIVE_WS = None  # type: WebSocket | None
+
+
+def read_checksum(bin_path: str, provided: str | None) -> str:
+    if provided:
+        # Check if provided is a file path that exists
+        if os.path.exists(provided):
+            with open(provided, "r", encoding="utf-8") as f:
+                return f.read().strip().lower()
+        # Otherwise treat it as a hex checksum string
+        return provided.strip().lower()
+    # Try <bin>.checksum
+    chk_path = bin_path + ".checksum"
+    if os.path.exists(chk_path):
+        with open(chk_path, "r", encoding="utf-8") as f:
+            return f.read().strip().lower()
+    # Else compute SHA-256
+    h = hashlib.sha256()
+    with open(bin_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def handle_ota_command(ws: WebSocket, bin_path: str, checksum_hint: str | None):
+    if not os.path.exists(bin_path):
+        log("⚠️", f"File not found: {bin_path}")
+        return
+
+    size = os.path.getsize(bin_path)
+    checksum = read_checksum(bin_path, checksum_hint)
+
+    # 1) Request OTA with size + checksum
+    req = {"cmd": "request_ota", "size": size, "sha256": checksum}
+    await ws.send_text(json.dumps(req))
+    log("➡️", f"Sent OTA request size={size} sha256={checksum}")
+
+    # 2) Stream binary in chunks
+    CHUNK = 2048
+    sent = 0
+    try:
+        with open(bin_path, "rb") as f:
+            while True:
+                buf = f.read(CHUNK)
+                if not buf:
+                    break
+                await ws.send_bytes(buf)
+                sent += len(buf)
+                if sent % (CHUNK * 10) == 0:
+                    log("⬆️", f"Sent {sent}/{size} bytes")
+                await asyncio.sleep(0)  # yield
+    except Exception as e:
+        log("❌", f"OTA send failed: {e}")
+        return
+
+    log("✅", f"OTA binary sent: {sent}/{size} bytes")
+
+    # 3) Notify completion
+    await ws.send_text("OTA_COMPLETE")
+    log("➡️", "Sent OTA_COMPLETE")
 
 
 async def send_wav(ws: WebSocket, path: str):
@@ -225,6 +285,8 @@ HELP_TEXT = (
     "  name <text>         -> set device_name\n"
     "  status              -> request_status\n"
     "  reboot              -> reboot device\n"
+    "  ble                 -> open BLE config mode\n"
+    "  ota <bin> [chk]     -> stream OTA firmware (reads .checksum if not provided)\n"
     "  wifi <ssid> <pass>  -> set_wifi (ESP replies not_supported)\n"
     "  wsurl <ws-url>      -> set_ws_url (reserved/not implemented)\n"
     "  help                -> show this help\n"
@@ -244,12 +306,18 @@ def build_json(cmd: str, *args: str) -> dict:
         return {"cmd": "request_status"}
     if c == "reboot":
         return {"cmd": "reboot"}
+    if c == "ble":
+        return {"cmd": "request_ble_config"}
     if c == "wifi" and args:
         ssid = args[0]
         password = args[1] if len(args) > 1 else ""
         return {"cmd": "set_wifi", "ssid": ssid, "password": password}
     if c == "wsurl" and args:
         return {"cmd": "set_ws_url", "url": args[0]}
+    if c == "ota" and args:
+        bin_path = args[0]
+        checksum = args[1] if len(args) > 1 else None
+        return {"cmd": "__ota__", "bin": bin_path, "checksum": checksum}
     raise ValueError("Unknown or invalid command")
 
 
@@ -284,6 +352,13 @@ async def console_loop(server: uvicorn.Server):
                 payload = build_json(cmd, *args)
             except Exception as e:
                 log("⚠️", f"{e}. Type 'help' for usage.")
+                continue
+
+            # OTA command is handled separately (streaming binary)
+            if payload.get("cmd") == "__ota__":
+                bin_path = payload.get("bin")
+                checksum = payload.get("checksum")
+                await handle_ota_command(ACTIVE_WS, bin_path, checksum)
                 continue
 
             try:

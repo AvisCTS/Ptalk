@@ -33,6 +33,7 @@ namespace ws_config
         REBOOT = 7,                // Server → Device: Request reboot
         REQUEST_STATUS = 8,        // Server → Device: Request device status
         REQUEST_OTA = 9,           // Server → Device: Trigger OTA update (optional version)
+        REQUEST_BLE_CONFIG = 10,   // Server → Device: Open BLE config mode with WiFi scan
         
         // Add more as needed
     };
@@ -201,6 +202,8 @@ namespace ws_config
             return ConfigCommand::REQUEST_STATUS;
         if (cmd_str == "request_ota")
             return ConfigCommand::REQUEST_OTA;
+        if (cmd_str == "request_ble_config")
+            return ConfigCommand::REQUEST_BLE_CONFIG;
         
         return ConfigCommand::INVALID;
     }
@@ -230,6 +233,8 @@ namespace ws_config
             return "request_status";
         case ConfigCommand::REQUEST_OTA:
             return "request_ota";
+        case ConfigCommand::REQUEST_BLE_CONFIG:
+            return "request_ble_config";
         default:
             return "invalid";
         }

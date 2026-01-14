@@ -130,6 +130,10 @@ public:
     void stopPortal();
 
     void startBLEConfigMode();
+
+    // Open BLE config mode with WiFi scan (can be called proactively)
+    void openBLEConfigMode();
+
     // ======================================================
     // Emotion code parsing (from WebSocket messages)
     // ======================================================

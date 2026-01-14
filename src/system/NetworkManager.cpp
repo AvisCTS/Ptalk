@@ -811,6 +811,50 @@ void NetworkManager::startBLEConfigMode()
         ble_service->start();
     }
 }
+
+void NetworkManager::openBLEConfigMode()
+{
+    ESP_LOGI(TAG, "Opening BLE config mode proactively");
+
+    // 1. Disconnect WiFi first to stop STA from connecting
+    if (wifi)
+    {
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
+    }
+
+    // 2. Start STA and scan networks (no longer connecting, so scan will work)
+    if (wifi)
+    {
+        wifi->ensureStaStarted();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for STA to be ready
+
+        cached_networks = wifi->scanNetworks();
+        ESP_LOGI(TAG, "Scanned and cached %d networks before BLE mode", cached_networks.size());
+    }
+
+    // 3. Now STOP WiFi completely to free RF for BLE
+    if (wifi)
+    {
+        wifi->disconnect();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
+        
+        // Properly stop WiFi before deinit
+        esp_wifi_stop();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WiFi to stop
+        
+        esp_wifi_deinit();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for deinit to complete
+        
+        ESP_LOGI(TAG, "WiFi fully stopped and deinitialized for BLE");
+    }
+
+    // 4. Publish state (BLE will be started later when RAM is freed)
+    publishState(state::ConnectivityState::CONFIG_BLE);
+
+    ESP_LOGI(TAG, "BLE config mode ready - call startBLEConfigMode() when RAM is freed");
+}
+
 // ============================================================================
 // EMOTION CODE PARSING
 // ============================================================================
@@ -1054,14 +1098,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
 
     case ws_config::ConfigCommand::REQUEST_OTA:
     {
-        // Optional version field
-        std::string version;
-        cJSON *ver_obj = cJSON_GetObjectItem(root, "version");
-        if (ver_obj && ver_obj->valuestring)
-        {
-            version = ver_obj->valuestring;
-        }
-
+        // Server is initiating OTA - prepare to receive binary data
         uint32_t fw_size = 0;
         cJSON *size_obj = cJSON_GetObjectItem(root, "size");
         if (size_obj && cJSON_IsNumber(size_obj))
@@ -1076,24 +1113,47 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
             fw_sha256 = sha_obj->valuestring;
         }
 
-        bool ok = requestFirmwareUpdate(version, fw_size, fw_sha256);
+        // Setup OTA state to receive binary data
+        firmware_download_active = true;
+        firmware_bytes_received = 0;
+        firmware_expected_size = fw_size;
+        firmware_expected_sha256 = fw_sha256;
 
+        ESP_LOGI(TAG, "OTA initiated by server: size=%u, sha256=%s", fw_size, fw_sha256.c_str());
+
+        // Send ACK - ready to receive firmware
         cJSON *resp = cJSON_CreateObject();
-        cJSON_AddStringToObject(resp, "status", ok ? "ok" : "error");
-        if (!version.empty())
-            cJSON_AddStringToObject(resp, "version", version.c_str());
+        cJSON_AddStringToObject(resp, "status", "ok");
+        cJSON_AddStringToObject(resp, "message", "Ready to receive firmware");
         if (fw_size > 0)
             cJSON_AddNumberToObject(resp, "size", fw_size);
         if (!fw_sha256.empty())
             cJSON_AddStringToObject(resp, "sha256", fw_sha256.c_str());
         cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
-        if (!ok)
-            cJSON_AddStringToObject(resp, "message", "OTA request failed or WS not connected");
 
         char *resp_str = cJSON_Print(resp);
         sendText(resp_str);
         cJSON_free(resp_str);
         cJSON_Delete(resp);
+        break;
+    }
+
+    case ws_config::ConfigCommand::REQUEST_BLE_CONFIG:
+    {
+        cJSON *ack = cJSON_CreateObject();
+        cJSON_AddStringToObject(ack, "status", "ok");
+        cJSON_AddStringToObject(ack, "message", "Opening BLE config mode...");
+        cJSON_AddStringToObject(ack, "device_id", getDeviceEfuseID().c_str());
+        char *ack_str = cJSON_Print(ack);
+        sendText(ack_str);
+        cJSON_free(ack_str);
+        cJSON_Delete(ack);
+        
+        // Delay before opening BLE to send ack
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        
+        // Open BLE config mode (this will scan WiFi and prepare for BLE)
+        openBLEConfigMode();
         break;
     }
 
