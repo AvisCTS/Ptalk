@@ -133,6 +133,9 @@ public:
 
     // Open BLE config mode with WiFi scan (can be called proactively)
     void openBLEConfigMode();
+    
+    // Deferred BLE config mode (called from separate task to avoid callback issues)
+    void openBLEConfigModeDeferred();
 
     // ======================================================
     // Emotion code parsing (from WebSocket messages)
@@ -275,4 +278,8 @@ private:
 
     // WiFi retry state
     TaskHandle_t wifi_retry_task = nullptr;
+    
+    // BLE config task (deferred from callback context)
+    static void bleConfigTaskEntry(void *arg);
+    TaskHandle_t ble_config_task = nullptr;
 };

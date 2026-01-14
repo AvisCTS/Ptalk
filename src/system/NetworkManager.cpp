@@ -241,6 +241,8 @@ void NetworkManager::taskEntry(void *arg)
     {
         if (!self->started.load())
         {
+            // Clear our own handle before self-deleting
+            self->task_handle = nullptr;
             vTaskDelete(nullptr);
         }
 
@@ -812,9 +814,80 @@ void NetworkManager::startBLEConfigMode()
     }
 }
 
+// Static task entry for deferred BLE config
+void NetworkManager::bleConfigTaskEntry(void *arg)
+{
+    auto *self = static_cast<NetworkManager *>(arg);
+    if (self)
+    {
+        self->openBLEConfigModeDeferred();
+    }
+    self->ble_config_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
 void NetworkManager::openBLEConfigMode()
 {
-    ESP_LOGI(TAG, "Opening BLE config mode proactively");
+    ESP_LOGI(TAG, "Opening BLE config mode - spawning deferred task");
+    
+    // CRITICAL: Cannot cleanup WebSocket from within its own callback!
+    // Spawn a separate task to handle the cleanup safely
+    if (ble_config_task != nullptr)
+    {
+        ESP_LOGW(TAG, "BLE config task already running");
+        return;
+    }
+    
+    xTaskCreate(
+        &NetworkManager::bleConfigTaskEntry,
+        "BLEConfig",
+        6144,
+        this,
+        5,
+        &ble_config_task
+    );
+}
+
+void NetworkManager::openBLEConfigModeDeferred()
+{
+    ESP_LOGI(TAG, "Opening BLE config mode (deferred task)");
+
+    // 0. STOP NETWORK MANAGER COMPLETELY
+    ESP_LOGI(TAG, "Stopping all network operations...");
+    
+    started = false;  // Signal network loop task to exit gracefully
+    ws_should_run = false;
+    ws_running = false;
+    
+    // Wait for network loop task to exit gracefully (started=false signals it)
+    // Task will set task_handle = nullptr before self-deleting
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    // Now safe to destroy WebSocket from outside callback context
+    if (ws)
+    {
+        ESP_LOGI(TAG, "Destroying WebSocket...");
+        ws->close();  // This can now safely destroy the client
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WebSocket task to fully terminate
+        ESP_LOGI(TAG, "WebSocket destroyed");
+    }
+    
+    // Only try to delete task if it hasn't already self-deleted
+    // (task clears its own handle before vTaskDelete(nullptr))
+    if (task_handle)
+    {
+        ESP_LOGI(TAG, "Force deleting network task...");
+        TaskHandle_t th = task_handle;
+        task_handle = nullptr;
+        vTaskDelete(th);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Network task already exited");
+    }
+    
+    ESP_LOGI(TAG, "Network operations stopped");
 
     // 1. Disconnect WiFi first to stop STA from connecting
     if (wifi)
