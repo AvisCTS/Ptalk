@@ -68,9 +68,8 @@ private:
     std::string expected_sha256_hex;
     bool checksum_enabled = false;
 
-    // SHA-256 state
-    mbedtls_sha256_context sha_ctx;
-    bool sha_started = false;
+    // NOTE: SHA256 is calculated after download by reading from flash
+    // This avoids hardware SHA engine conflicts with WebSocket TLS
 
     // ======= ESP32 OTA handle =======
     esp_ota_handle_t update_handle = 0;

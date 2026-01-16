@@ -261,6 +261,7 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
         else
         {
             temp_cfg_.ws_url.assign((char *)v, l);
+            ESP_LOGI(TAG, "WS URL set (%d bytes): %.*s", (int)l, (int)l, reinterpret_cast<char *>(v));
         }
     }
     else if (h == char_handles[7])
@@ -365,12 +366,23 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
             static const char locked_msg[] = "LOCKED";
             rsp.attr_value.len = sizeof(locked_msg) - 1;
             memcpy(rsp.attr_value.value, locked_msg, rsp.attr_value.len);
+            ESP_LOGW(TAG, "WS URL read blocked: LOCKED (auth required)");
         }
         else
         {
-            rsp.attr_value.len = temp_cfg_.ws_url.length();
-            if (rsp.attr_value.len > 0)
+            if (temp_cfg_.ws_url.empty())
+            {
+                static const char empty_msg[] = "EMPTY";
+                rsp.attr_value.len = sizeof(empty_msg) - 1;
+                memcpy(rsp.attr_value.value, empty_msg, rsp.attr_value.len);
+                ESP_LOGW(TAG, "WS URL read: value not set yet");
+            }
+            else
+            {
+                rsp.attr_value.len = temp_cfg_.ws_url.length();
                 memcpy(rsp.attr_value.value, temp_cfg_.ws_url.c_str(), rsp.attr_value.len);
+                ESP_LOGI(TAG, "WS URL read: %s (%d bytes)", temp_cfg_.ws_url.c_str(), (int)rsp.attr_value.len);
+            }
         }
     }
     

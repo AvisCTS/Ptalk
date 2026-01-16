@@ -457,6 +457,18 @@ void NetworkManager::handleWsTextMessage(const std::string &msg)
 {
     ESP_LOGI(TAG, "WS Text Message: %s", msg.c_str());
 
+    // Check for OTA_COMPLETE message
+    if (msg == "OTA_COMPLETE")
+    {
+        ESP_LOGI(TAG, "🔧 OTA_COMPLETE received, calling firmware complete callback");
+        firmware_download_active = false;
+        if (on_firmware_complete_cb)
+        {
+            on_firmware_complete_cb(true, "OTA transfer complete");
+        }
+        return;
+    }
+
     // Check if this is a config command (JSON with "cmd" field)
     cJSON *json = cJSON_Parse(msg.c_str());
     if (json)
@@ -493,7 +505,20 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
     if (firmware_download_active)
     {
         firmware_bytes_received += len;
-        ESP_LOGI(TAG, "Firmware chunk: %zu bytes (total: %u bytes)", len, firmware_bytes_received);
+        
+        // Log only at progress milestones (25%, 50%, 75%, 100%) to reduce spam
+        if (firmware_expected_size > 0)
+        {
+            uint32_t percent_now = (firmware_bytes_received * 100) / firmware_expected_size;
+            static uint32_t last_logged_percent = 0;
+            
+            if (percent_now >= last_logged_percent + 25 || percent_now == 100)
+            {
+                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes)", 
+                         percent_now, firmware_bytes_received, firmware_expected_size);
+                last_logged_percent = (percent_now / 25) * 25;
+            }
+        }
 
         // Notify OTA updater
         if (on_firmware_chunk_cb)
@@ -651,6 +676,11 @@ void NetworkManager::onFirmwareChunk(std::function<void(const uint8_t *, size_t)
 void NetworkManager::onFirmwareComplete(std::function<void(bool, const std::string &)> cb)
 {
     on_firmware_complete_cb = cb;
+}
+
+void NetworkManager::onServerOTARequest(std::function<void()> cb)
+{
+    on_server_ota_request_cb = cb;
 }
 
 // Stop captive portal if running (used for low-battery mode)
@@ -1193,6 +1223,18 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         firmware_expected_sha256 = fw_sha256;
 
         ESP_LOGI(TAG, "OTA initiated by server: size=%u, sha256=%s", fw_size, fw_sha256.c_str());
+
+        // CRITICAL: Notify AppController to setup OTA callbacks BEFORE sending ACK
+        // This ensures callbacks are registered before binary data arrives
+        if (on_server_ota_request_cb)
+        {
+            ESP_LOGI(TAG, "Calling server OTA request callback to setup handlers...");
+            on_server_ota_request_cb();
+        }
+        else
+        {
+            ESP_LOGW(TAG, "No server OTA request callback registered - OTA may fail!");
+        }
 
         // Send ACK - ready to receive firmware
         cJSON *resp = cJSON_CreateObject();

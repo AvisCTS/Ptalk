@@ -261,6 +261,53 @@ void AppController::start()
     // ---------------------------------------------------------------------
     if (network)
     {
+        // Register callback for server-initiated OTA (before start)
+        // This callback runs SYNCHRONOUSLY before ACK is sent, so we must setup
+        // OTA handlers immediately (not via event queue which is async)
+        network->onServerOTARequest([this]()
+        {
+            ESP_LOGI(TAG, "Server initiated OTA - setting up handlers synchronously");
+            
+            // Set system state (for UI)
+            StateManager::instance().setSystemState(state::SystemState::UPDATING_FIRMWARE);
+            
+            // Register chunk handler
+            network->onFirmwareChunk([this](const uint8_t *data, size_t size)
+            {
+                if (!ota) return;
+
+                if (!ota->isUpdating()) {
+                    uint32_t expected_size = network->getFirmwareExpectedSize();
+                    std::string expected_sha = network->getFirmwareExpectedChecksum();
+
+                    if (!ota->beginUpdate(expected_size, expected_sha)) {
+                        ESP_LOGE(TAG, "OTA begin failed (size=%u)", expected_size);
+                        StateManager::instance().setSystemState(state::SystemState::ERROR);
+                        return;
+                    }
+                }
+
+                int written = ota->writeChunk(data, size);
+                if (written < 0) {
+                    ESP_LOGE(TAG, "OTA write failed, aborting");
+                    ota->abortUpdate();
+                    StateManager::instance().setSystemState(state::SystemState::ERROR);
+                }
+            });
+
+            // Register complete handler
+            network->onFirmwareComplete([this](bool success, const std::string &msg)
+            {
+                if (success) {
+                    postEvent(event::AppEvent::OTA_FINISHED);
+                } else {
+                    StateManager::instance().setSystemState(state::SystemState::ERROR);
+                }
+            });
+            
+            ESP_LOGI(TAG, "OTA handlers registered successfully");
+        });
+
         auto ps = StateManager::instance().getPowerState();
         if (/*ps == state::PowerState::LOW_BATTERY || */ ps == state::PowerState::CRITICAL)
         {
@@ -579,37 +626,23 @@ void AppController::processQueue()
                 case event::AppEvent::OTA_FINISHED:
                     if (ota && ota->isUpdating())
                     {
-                        // TODO: ota->finish();
                         if (ota->finishUpdate())
                         {
-                            if (display)
-                            {
-                                display->showOTACompleted();
-                            }
-                            // Schedule reboot after a delay
-                            vTaskDelay(pdMS_TO_TICKS(2000));
-                            if (display)
-                            {
-                                display->showRebooting();
-                            }
+                            // OTA success - reboot immediately
+                            // Skip display update to avoid SPI conflict after flash operations
+                            ESP_LOGI(TAG, "✅ OTA completed successfully! Rebooting in 1 second...");
                             vTaskDelay(pdMS_TO_TICKS(1000));
                             reboot();
                         }
                         else
                         {
-                            if (display)
-                            {
-                                display->showOTAError("Update validation failed");
-                            }
+                            ESP_LOGE(TAG, "OTA finishUpdate failed");
                             StateManager::instance().setSystemState(state::SystemState::ERROR);
                         }
                     }
                     else
                     {
-                        if (display)
-                        {
-                            display->showOTAError("No update in progress");
-                        }
+                        ESP_LOGW(TAG, "OTA_FINISHED but no update in progress");
                         StateManager::instance().setSystemState(state::SystemState::ERROR);
                     }
                     break;

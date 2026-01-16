@@ -126,6 +126,9 @@ public:
     // Register callback for firmware download completion (success flag, message).
     void onFirmwareComplete(std::function<void(bool success, const std::string &msg)> cb);
 
+    // Register callback when server initiates OTA (to setup OTA handlers before data arrives)
+    void onServerOTARequest(std::function<void()> cb);
+
     // Control captive portal explicitly
     void stopPortal();
 
@@ -269,6 +272,7 @@ private:
     // ======================================================
     std::function<void(const uint8_t *, size_t)> on_firmware_chunk_cb = nullptr;
     std::function<void(bool, const std::string &)> on_firmware_complete_cb = nullptr;
+    std::function<void()> on_server_ota_request_cb = nullptr;
 
     // OTA state
     bool firmware_download_active = false;

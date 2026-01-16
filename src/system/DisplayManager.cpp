@@ -400,7 +400,7 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::UPDATING_FIRMWARE:
-        playEmotion("updating");
+        playText("Updating Firmware...", -1, -1, 0xFFFF, 1.8); // centered, white text
         break;
 
     case state::SystemState::FACTORY_RESETTING:
