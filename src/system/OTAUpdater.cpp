@@ -7,19 +7,19 @@
 #include <cctype>
 
 // Helper: convert uint8_t digest to lowercase hex string
-static std::string toHexLower(const uint8_t *data, size_t len)
-{
-    static const char *hex = "0123456789abcdef";
-    std::string out;
-    out.reserve(len * 2);
-    for (size_t i = 0; i < len; ++i)
-    {
-        uint8_t b = data[i];
-        out.push_back(hex[b >> 4]);
-        out.push_back(hex[b & 0x0F]);
-    }
-    return out;
-}
+// static std::string toHexLower(const uint8_t *data, size_t len)
+// {
+//     static const char *hex = "0123456789abcdef";
+//     std::string out;
+//     out.reserve(len * 2);
+//     for (size_t i = 0; i < len; ++i)
+//     {
+//         uint8_t b = data[i];
+//         out.push_back(hex[b >> 4]);
+//         out.push_back(hex[b & 0x0F]);
+//     }
+//     return out;
+// }
 
 static std::string toLower(std::string s)
 {
