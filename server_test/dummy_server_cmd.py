@@ -372,8 +372,8 @@ async def console_loop(server: uvicorn.Server):
 
 
 async def main():
-    log("🚀", "Server starting at ws://0.0.0.0:8000/ws")
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, loop="asyncio")
+    log("🚀", "Server starting at ws://0.0.0.0:80/ws")
+    config = uvicorn.Config(app, host="0.0.0.0", port=80, loop="asyncio")
     server = uvicorn.Server(config)
     await asyncio.gather(server.serve(), console_loop(server))
 
