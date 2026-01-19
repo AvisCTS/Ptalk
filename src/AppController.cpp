@@ -192,10 +192,7 @@ void AppController::start()
 
     started.store(true);
 
-    // ⚠️  CRITICAL ORDER: Task must be running BEFORE any module triggers state changes
-    // Otherwise state notifications arrive at app_queue before it's ready
-
-    // 1️⃣ Start the main controller task FIRST (must be ready before other modules post)
+    // 1️⃣ Start the main controller task FIRST
     BaseType_t res = xTaskCreatePinnedToCore(
         &AppController::controllerTask,
         "AppControllerTask",
@@ -203,7 +200,7 @@ void AppController::start()
         this,
         4,
         &app_task,
-        1 // core 1
+        1
     );
 
     if (res != pdPASS)
@@ -213,9 +210,9 @@ void AppController::start()
         return;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10)); // Ensure task is running before modules start
+    vTaskDelay(pdMS_TO_TICKS(10));
 
-    // 2️⃣ Start PowerManager to monitor battery
+    // 2️⃣ Start PowerManager
     if (power)
     {
         if (!power->init())
@@ -225,29 +222,11 @@ void AppController::start()
         else
         {
             power->start();
-            // Sample immediately to learn battery state early
             power->sampleNow();
-
-            // Check if waking from deep sleep due to battery check
-            // esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-            // if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-            //     ESP_LOGI(TAG, "Woke from deep sleep - checking battery");
-            //     auto ps = StateManager::instance().getPowerState();
-            //     if (ps == state::PowerState::CRITICAL || ps == state::PowerState::LOW_BATTERY) {
-            //         ESP_LOGW(TAG, "Battery still low/critical - going back to sleep");
-            //         vTaskDelay(pdMS_TO_TICKS(1000));
-            //         enterSleep();
-            //         // Will not reach here
-            //     } else {
-            //         ESP_LOGI(TAG, "Battery recovered to acceptable level - continuing boot");
-            //     }
-            // }
         }
     }
 
-    // ---------------------------------------------------------------------
-    // 3) Start DisplayManager to show portal/status
-    // ---------------------------------------------------------------------
+    // 3️⃣ Start DisplayManager
     if (display)
     {
         if (!display->isLoopRunning() && !display->startLoop(33, 3, 4096, 1))
@@ -256,92 +235,100 @@ void AppController::start()
         }
     }
 
-    // ---------------------------------------------------------------------
-    // 4) Start NetworkManager if battery not critical
-    // ---------------------------------------------------------------------
+    // ============================================================================
+    // 4️⃣ Start NetworkManager + Setup OTA callbacks
+    // ============================================================================
     if (network)
     {
-        // Register callback for server-initiated OTA (before start)
-        // This callback runs SYNCHRONOUSLY before ACK is sent, so we must setup
-        // OTA handlers immediately (not via event queue which is async)
+        // ✅ CRITICAL: Register OTA callback BEFORE starting network
+        // This ensures handlers are ready when server sends REQUEST_OTA via MQTT
         network->onServerOTARequest([this]()
         {
-            ESP_LOGI(TAG, "Server initiated OTA - setting up handlers synchronously");
+            ESP_LOGI(TAG, "🔄 Server initiated OTA via MQTT - setting up handlers");
             
             // Set system state (for UI)
             StateManager::instance().setSystemState(state::SystemState::UPDATING_FIRMWARE);
             
-            // Register chunk handler
+            // ✅ Register chunk handler (called for each binary chunk)
             network->onFirmwareChunk([this](const uint8_t *data, size_t size)
             {
-                if (!ota) return;
+                if (!ota) {
+                    ESP_LOGE(TAG, "OTA module not available!");
+                    return;
+                }
 
+                // Begin OTA on first chunk
                 if (!ota->isUpdating()) {
                     uint32_t expected_size = network->getFirmwareExpectedSize();
                     std::string expected_sha = network->getFirmwareExpectedChecksum();
 
+                    ESP_LOGI(TAG, "📦 Beginning OTA: size=%u, sha256=%s", 
+                             expected_size, expected_sha.c_str());
+
                     if (!ota->beginUpdate(expected_size, expected_sha)) {
-                        ESP_LOGE(TAG, "OTA begin failed (size=%u)", expected_size);
+                        ESP_LOGE(TAG, "❌ OTA begin failed!");
                         StateManager::instance().setSystemState(state::SystemState::ERROR);
                         return;
                     }
                 }
 
+                // Write chunk to flash
                 int written = ota->writeChunk(data, size);
                 if (written < 0) {
-                    ESP_LOGE(TAG, "OTA write failed, aborting");
+                    ESP_LOGE(TAG, "❌ OTA write failed, aborting");
                     ota->abortUpdate();
                     StateManager::instance().setSystemState(state::SystemState::ERROR);
                 }
             });
 
-            // Register complete handler
+            // ✅ Register complete handler (called when all chunks received)
             network->onFirmwareComplete([this](bool success, const std::string &msg)
             {
                 if (success) {
+                    ESP_LOGI(TAG, "✅ OTA transfer complete: %s", msg.c_str());
                     postEvent(event::AppEvent::OTA_FINISHED);
                 } else {
+                    ESP_LOGE(TAG, "❌ OTA failed: %s", msg.c_str());
                     StateManager::instance().setSystemState(state::SystemState::ERROR);
                 }
             });
             
-            ESP_LOGI(TAG, "OTA handlers registered successfully");
+            ESP_LOGI(TAG, "✅ OTA handlers registered successfully");
         });
 
+        // Check battery before starting network
         auto ps = StateManager::instance().getPowerState();
-        if (/*ps == state::PowerState::LOW_BATTERY || */ ps == state::PowerState::CRITICAL)
+        if (ps == state::PowerState::CRITICAL)
         {
-            ESP_LOGW(TAG, "Skipping NetworkManager start due to low battery");
+            ESP_LOGW(TAG, "Skipping NetworkManager start due to critical battery");
         }
         else
         {
             network->start();
         }
     }
-    // ---------------------------------------------------------------------
-    // 5) Start AudioManager last (needs network for streaming)
-    // ---------------------------------------------------------------------
+
+    // 5️⃣ Start AudioManager
     if (audio)
     {
         auto ps = StateManager::instance().getPowerState();
-        if (/*ps == state::PowerState::LOW_BATTERY || */ ps == state::PowerState::CRITICAL)
+        if (ps == state::PowerState::CRITICAL)
         {
-            ESP_LOGW(TAG, "Skipping AudioManager start due to low battery");
+            ESP_LOGW(TAG, "Skipping AudioManager start due to critical battery");
         }
         else
         {
             audio->start();
         }
     }
-    // ---------------------------------------------------------------------
-    // 6) TouchInput start
-    // ---------------------------------------------------------------------
+
+    // 6️⃣ Start TouchInput
     if (touch)
     {
         auto ps = StateManager::instance().getPowerState();
-        if (/*ps == state::PowerState::LOW_BATTERY || */ ps == state::PowerState::CRITICAL)
+        if (ps == state::PowerState::CRITICAL)
         {
-            ESP_LOGW(TAG, "Skipping TouchInput start due to low battery");
+            ESP_LOGW(TAG, "Skipping TouchInput start due to critical battery");
         }
         else
         {
@@ -579,50 +566,50 @@ void AppController::processQueue()
                 case event::AppEvent::BATTERY_PERCENT_CHANGED:
                     // ✅ Removed: DisplayManager.update() queries power directly
                     break;
-                case event::AppEvent::OTA_BEGIN:
-                    // ✅ Only set state; DisplayManager subscribes and handles UI
-                    StateManager::instance().setSystemState(state::SystemState::UPDATING_FIRMWARE);
+                 case event::AppEvent::OTA_BEGIN:
+                //     // ✅ Only set state; DisplayManager subscribes and handles UI
+                //     StateManager::instance().setSystemState(state::SystemState::UPDATING_FIRMWARE);
 
-                    if (network)
-                    {
-                        // Request firmware from server
-                        network->onFirmwareChunk([this](const uint8_t *data, size_t size)
-                                                 {
-                                    if (!ota) return;
+                //     if (network)
+                //     {
+                //         // Request firmware from server
+                //         network->onFirmwareChunk([this](const uint8_t *data, size_t size)
+                //                                  {
+                //                     if (!ota) return;
 
-                                    if (!ota->isUpdating()) {
-                                        uint32_t expected_size = network->getFirmwareExpectedSize();
-                                        std::string expected_sha = network->getFirmwareExpectedChecksum();
+                //                     if (!ota->isUpdating()) {
+                //                         uint32_t expected_size = network->getFirmwareExpectedSize();
+                //                         std::string expected_sha = network->getFirmwareExpectedChecksum();
 
-                                        if (!ota->beginUpdate(expected_size, expected_sha)) {
-                                            ESP_LOGE(TAG, "OTA begin failed (size=%u)", expected_size);
-                                            StateManager::instance().setSystemState(state::SystemState::ERROR);
-                                            return;
-                                        }
-                                    }
+                //                         if (!ota->beginUpdate(expected_size, expected_sha)) {
+                //                             ESP_LOGE(TAG, "OTA begin failed (size=%u)", expected_size);
+                //                             StateManager::instance().setSystemState(state::SystemState::ERROR);
+                //                             return;
+                //                         }
+                //                     }
 
-                                    int written = ota->writeChunk(data, size);
-                                    if (written < 0) {
-                                        ESP_LOGE(TAG, "OTA write failed, aborting");
-                                        ota->abortUpdate();
-                                        StateManager::instance().setSystemState(state::SystemState::ERROR);
-                                    }
-                                    });
+                //                     int written = ota->writeChunk(data, size);
+                //                     if (written < 0) {
+                //                         ESP_LOGE(TAG, "OTA write failed, aborting");
+                //                         ota->abortUpdate();
+                //                         StateManager::instance().setSystemState(state::SystemState::ERROR);
+                //                     }
+                //                     });
 
-                        network->onFirmwareComplete([this](bool success, const std::string &msg)
-                                                    {
-                                    if (success) {
-                                        postEvent(event::AppEvent::OTA_FINISHED);
-                                    } else {
-                                        StateManager::instance().setSystemState(state::SystemState::ERROR);
-                                    } });
+                //         network->onFirmwareComplete([this](bool success, const std::string &msg)
+                //                                     {
+                //                     if (success) {
+                //                         postEvent(event::AppEvent::OTA_FINISHED);
+                //                     } else {
+                //                         StateManager::instance().setSystemState(state::SystemState::ERROR);
+                //                     } });
 
-                        if (!network->requestFirmwareUpdate())
-                        {
-                            StateManager::instance().setSystemState(state::SystemState::ERROR);
-                        }
-                    }
-                    break;
+                //         if (!network->requestFirmwareUpdate())
+                //         {
+                //             StateManager::instance().setSystemState(state::SystemState::ERROR);
+                //         }
+                //     }
+                   break;
                 case event::AppEvent::OTA_FINISHED:
                     if (ota && ota->isUpdating())
                     {

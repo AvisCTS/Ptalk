@@ -559,7 +559,7 @@ bool DeviceProfile::setup(AppController &app)
         if (msg == "PROCESSING_START" || msg == "PROCESSING") {
             sm.setInteractionState(state::InteractionState::PROCESSING,
                                    state::InputSource::SERVER_COMMAND);
-        } else if (msg == "AUDIO_START") {
+        } else if (msg == "AUDIO_START"||msg == "SPEAKING" || msg == "SPEAK_START") {
             // Server explicitly starts audio; enter speaking state once per session
             if (!network_ptr->isSpeakingSessionActive()) {
                 network_ptr->startSpeakingSession();
@@ -569,9 +569,9 @@ bool DeviceProfile::setup(AppController &app)
         // } else if (msg == "LISTENING") {
         //     sm.setInteractionState(state::InteractionState::LISTENING,
         //                            state::InputSource::SERVER_COMMAND);
-        } else if (msg == "SPEAKING" || msg == "SPEAK_START") {
-            sm.setInteractionState(state::InteractionState::SPEAKING,
-                                   state::InputSource::SERVER_COMMAND);
+        // } else if (msg == "SPEAKING" || msg == "SPEAK_START") {
+        //     sm.setInteractionState(state::InteractionState::SPEAKING,
+        //                            state::InputSource::SERVER_COMMAND);
         } else if (msg == "IDLE" || msg == "SPEAK_END" || msg == "DONE" || msg == "TTS_END") {
             // Reset session flag to allow next TTS session
             network_ptr->endSpeakingSession();

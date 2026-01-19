@@ -117,9 +117,7 @@ public:
     // OTA Firmware Update Support
     // ======================================================
     // Request firmware update; server should respond with binary firmware stream.
-    // Optional version selects target; empty string requests latest. Returns false if WS not connected.
-    bool requestFirmwareUpdate(const std::string &version = "", uint32_t total_size = 0, const std::string &sha256 = "");
-
+    
     uint32_t getFirmwareExpectedSize() const { return firmware_expected_size; }
     std::string getFirmwareExpectedChecksum() const { return firmware_expected_sha256; }
 
@@ -186,6 +184,8 @@ private:
     // React to WebSocket status changes from WebSocketClient.
     void handleWsStatus(int status_code);
 
+    bool sendWSDeviceHandshake();
+
     // Retry logic for initial WiFi connection
     void retryWifiThenPortal();
     void retryWifiThenBLE();
@@ -200,7 +200,7 @@ private:
 
     // Handle inbound WS binary payloads (firmware or app data).
     void handleWsBinaryMessage(const uint8_t *data, size_t len);
-
+    void handleOtaBinaryChunk(const uint8_t *data, size_t len);
     // OTA chunk protocol ACK/NACK helpers
     void sendOtaAck(uint32_t seq);
     void sendOtaNack(uint32_t seq);

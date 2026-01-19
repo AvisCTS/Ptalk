@@ -5,7 +5,7 @@
 #include "system/AudioManager.hpp"
 #include "system/DisplayManager.hpp"
 #include "system/PowerManager.hpp"
-#include "system/WSConfig.hpp"
+#include "system/MQTTConfig.hpp"
 
 #include "esp_mac.h"
 #include <sstream>
@@ -19,17 +19,6 @@
 #include "esp_timer.h"
 #include "esp_crc.h" // For CRC32 verification
 
-std::string getDeviceMacID()
-{
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    std::stringstream ss;
-    for (int i = 0; i < 6; ++i)
-    {
-        ss << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (int)mac[i];
-    }
-    return ss.str();
-}
 
 static const char *TAG = "NetworkManager";
 
@@ -103,7 +92,7 @@ bool NetworkManager::init()
     mqtt->init();
 
     // Tạo topic dựa trên MAC ID
-    mqtt_base_topic = "devices/" + getDeviceMacID();
+    mqtt_base_topic = "devices/" + getDeviceEfuseID();
 
     setupMqtt();
     ESP_LOGI(TAG, "NetworkManager init OK");
@@ -453,10 +442,38 @@ void NetworkManager::handleWsStatus(int status)
         publishState(state::ConnectivityState::ONLINE);
 
         // Send device handshake to server with all info and device_id for linking
-        sendDeviceHandshake();
+        sendWSDeviceHandshake();
 
         break;
     }
+}
+bool NetworkManager::sendWSDeviceHandshake()
+{
+    if (!ws_running)
+        return false;
+
+    std::string device_id = getDeviceEfuseID();
+    std::string app_version = app_meta::APP_VERSION;
+    std::string device_name = nmgr_load_str("device_name", "PTalk");
+    uint8_t battery = power_manager ? power_manager->getPercent() : 85;
+
+    // Build handshake message with device info
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "cmd", "device_handshake");
+    cJSON_AddStringToObject(root, "device_id", device_id.c_str());
+    cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
+    cJSON_AddStringToObject(root, "device_name", device_name.c_str());
+    cJSON_AddNumberToObject(root, "battery_percent", battery);
+    cJSON_AddStringToObject(root, "connectivity_state", "ONLINE");
+
+    char *json_str = cJSON_Print(root);
+    bool result = sendText(json_str);
+
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "Device handshake sent to server");
+    return result;
 }
 
 // ============================================================================
@@ -466,143 +483,132 @@ void NetworkManager::handleWsTextMessage(const std::string &msg)
 {
     ESP_LOGI(TAG, "WS Text Message: %s", msg.c_str());
 
-    // Check for OTA_COMPLETE message
-    if (msg == "OTA_COMPLETE")
-    {
-        ESP_LOGI(TAG, "🔧 OTA_COMPLETE received, calling firmware complete callback");
-        firmware_download_active = false;
-        if (on_firmware_complete_cb)
-        {
-            on_firmware_complete_cb(true, "OTA transfer complete");
-        }
-        return;
-    }
+    // ❌ XÓA: Không còn parse JSON config commands từ WS
+    // cJSON *json = cJSON_Parse(msg.c_str());
+    // if (json) { ... handleConfigCommand(msg); ... }
 
-    // Check if this is a config command (JSON with "cmd" field)
-    cJSON *json = cJSON_Parse(msg.c_str());
-    if (json)
-    {
-        cJSON *cmd_field = cJSON_GetObjectItem(json, "cmd");
-        if (cmd_field && cmd_field->valuestring) // Check if it's a string
-        {
-            // This is a config command
-            cJSON_Delete(json);
-            handleConfigCommand(msg);
-            return;
-        }
-        cJSON_Delete(json);
-    }
-
-    // Try parsing emotion code if message is simple 2-char format
+    // ✅ GIỮ LẠI: Chỉ xử lý emotion codes và audio control
     if (msg.length() == 2)
     {
         auto emotion = parseEmotionCode(msg);
         StateManager::instance().setEmotionState(emotion);
         ESP_LOGI(TAG, "Emotion code: %s → %d", msg.c_str(), (int)emotion);
-        // Don't return - still call on_text_cb for logging/debugging
     }
 
-    if (on_text_cb)
-        on_text_cb(msg);
+
+        if (on_text_cb)
+            on_text_cb(msg);
+    
 }
 
 void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
 {
-    // ESP_LOGI(TAG, "WS Binary Message (%zu bytes)", len);
+    // ❌ XÓA: OTA logic đã chuyển sang MQTT
+    // if (firmware_download_active) { ... }
 
-    // Check if this is firmware data during OTA download
-    if (firmware_download_active)
+    // ✅ CHỈ GIỮ: Audio streaming downlink
+    if (on_binary_cb)
     {
-        // OTA Chunk Protocol: [4B seq][4B size][4B crc32][data...]
-        const size_t HEADER_SIZE = 12; // 4 + 4 + 4 bytes
+        on_binary_cb(data, len);
+    }
+}
 
-        if (len < HEADER_SIZE)
+void NetworkManager::handleOtaBinaryChunk(const uint8_t *data, size_t len)
+{
+    if (!firmware_download_active)
+    {
+        ESP_LOGW(TAG, "OTA not active, ignoring binary chunk");
+        sendOtaNack(0);
+        return;
+    }
+
+    const size_t HEADER_SIZE = 12;
+    if (len < HEADER_SIZE)
+    {
+        ESP_LOGE(TAG, "OTA chunk too small: %zu bytes", len);
+        return;
+    }
+
+    // Parse header: [4B seq][4B size][4B crc32][data...]
+    uint32_t seq = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    uint32_t chunk_size = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
+    uint32_t recv_crc = data[8] | (data[9] << 8) | (data[10] << 16) | (data[11] << 24);
+
+    const uint8_t *chunk_data = data + HEADER_SIZE;
+    size_t actual_data_len = len - HEADER_SIZE;
+
+    // Verify size
+    if (actual_data_len != chunk_size)
+    {
+        ESP_LOGE(TAG, "Chunk size mismatch: header=%u, actual=%zu", chunk_size, actual_data_len);
+        sendOtaNack(seq);
+        return;
+    }
+
+    // Verify CRC32
+    uint32_t calc_crc = esp_crc32_le(0, chunk_data, chunk_size);
+    if (calc_crc != recv_crc)
+    {
+        ESP_LOGE(TAG, "Chunk %u CRC mismatch: recv=0x%08X, calc=0x%08X",
+                 seq, recv_crc, calc_crc);
+        ota_chunks_failed++;
+        sendOtaNack(seq);
+        return;
+    }
+
+    // Check sequence
+    if (seq != ota_expected_seq)
+    {
+        if (seq < ota_expected_seq)
         {
-            ESP_LOGE(TAG, "OTA chunk too small: %zu bytes (need >= %zu)", len, HEADER_SIZE);
-            sendOtaNack(ota_expected_seq);
+            ESP_LOGW(TAG, "Duplicate chunk %u (expected %u) - ACKing", seq, ota_expected_seq);
+            sendOtaAck(seq);
             return;
         }
-
-        // Parse header (little-endian)
-        uint32_t seq = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-        uint32_t chunk_size = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
-        uint32_t recv_crc = data[8] | (data[9] << 8) | (data[10] << 16) | (data[11] << 24);
-
-        const uint8_t *chunk_data = data + HEADER_SIZE;
-        size_t actual_data_len = len - HEADER_SIZE;
-
-        // Verify data size matches header
-        if (actual_data_len != chunk_size)
+        else
         {
-            ESP_LOGE(TAG, "OTA chunk size mismatch: header=%u, actual=%zu", chunk_size, actual_data_len);
+            ESP_LOGE(TAG, "Sequence gap: got %u, expected %u", seq, ota_expected_seq);
             sendOtaNack(seq);
             return;
-        }
-
-        // Verify CRC32
-        uint32_t calc_crc = esp_crc32_le(0, chunk_data, chunk_size);
-        if (calc_crc != recv_crc)
-        {
-            ESP_LOGE(TAG, "OTA chunk %u CRC mismatch: recv=0x%08X, calc=0x%08X", seq, recv_crc, calc_crc);
-            ota_chunks_failed++;
-            sendOtaNack(seq);
-            return;
-        }
-
-        // Verify sequence number (allow some tolerance for retries)
-        if (seq != ota_expected_seq)
-        {
-            if (seq < ota_expected_seq)
-            {
-                // Duplicate chunk (retry from server) - ACK but ignore
-                ESP_LOGW(TAG, "OTA duplicate chunk %u (expected %u) - ACKing", seq, ota_expected_seq);
-                sendOtaAck(seq);
-                return;
-            }
-            else
-            {
-                // Missed chunks - this is a problem
-                ESP_LOGE(TAG, "OTA chunk sequence gap: got %u, expected %u", seq, ota_expected_seq);
-                sendOtaNack(seq);
-                return;
-            }
-        }
-
-        // Chunk verified - pass to OTA handler
-        firmware_bytes_received += chunk_size;
-        ota_chunks_received++;
-        ota_expected_seq++;
-
-        // Send ACK for this chunk
-        sendOtaAck(seq);
-
-        // Log progress at milestones
-        if (firmware_expected_size > 0)
-        {
-            uint32_t percent_now = (firmware_bytes_received * 100) / firmware_expected_size;
-            static uint32_t last_logged_percent = 0;
-
-            if (percent_now >= last_logged_percent + 10 || percent_now == 100)
-            {
-                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes, chunk %u/%u)",
-                         percent_now, firmware_bytes_received, firmware_expected_size,
-                         ota_chunks_received, ota_total_chunks);
-                last_logged_percent = (percent_now / 10) * 10;
-            }
-        }
-
-        // Notify OTA updater with verified data only
-        if (on_firmware_chunk_cb)
-        {
-            on_firmware_chunk_cb(chunk_data, chunk_size);
         }
     }
-    else
+
+    // ✅ Chunk OK - forward to OTA handler
+    firmware_bytes_received += chunk_size;
+    ota_chunks_received++;
+    ota_expected_seq++;
+
+    // Log progress
+    if (firmware_expected_size > 0)
     {
-        // Regular binary message
-        if (on_binary_cb)
+        uint32_t percent = (firmware_bytes_received * 100) / firmware_expected_size;
+        static uint32_t last_percent = 0;
+        if (percent >= last_percent + 10 || percent == 100)
         {
-            on_binary_cb(data, len);
+            ESP_LOGI(TAG, "OTA: %u%% (%u/%u bytes, chunk %u/%u)",
+                     percent, firmware_bytes_received, firmware_expected_size,
+                     ota_chunks_received, ota_total_chunks);
+            last_percent = (percent / 10) * 10;
+        }
+    }
+
+    // Pass to AppController
+    if (on_firmware_chunk_cb)
+    {
+        on_firmware_chunk_cb(chunk_data, chunk_size);
+    }
+
+    // Send ACK via MQTT
+    sendOtaAck(seq);
+
+    if (firmware_bytes_received >= firmware_expected_size)
+    {
+        ESP_LOGI(TAG, "OTA download complete: %u bytes in %u chunks (%u failed)",
+                 firmware_bytes_received, ota_chunks_received, ota_chunks_failed);
+        firmware_download_active = false;
+        if (on_firmware_complete_cb)
+        {
+            on_firmware_complete_cb(true, "Download complete");
         }
     }
 }
@@ -708,40 +714,86 @@ void NetworkManager::handleInteractionState(state::InteractionState s)
 // ============================================================================
 void NetworkManager::sendOtaAck(uint32_t seq)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "{\"ota_ack\":%u}", seq);
-    sendText(buf);
+    if (!mqtt || !mqtt->isConnected())
+    {
+        ESP_LOGW(TAG, "MQTT not connected, cannot send OTA ACK");
+        return;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "ota_ack", seq);
+    char *json_str = cJSON_PrintUnformatted(root);
+
+    mqtt->publish(mqtt_base_topic + "/ota_ack", json_str, 1, false);
+
+    cJSON_free(json_str);
+    cJSON_Delete(root);
 }
 
 void NetworkManager::sendOtaNack(uint32_t seq)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "{\"ota_nack\":%u}", seq);
-    sendText(buf);
-    ESP_LOGW(TAG, "Sent NACK for chunk %u", seq);
+    if (!mqtt || !mqtt->isConnected())
+    {
+        ESP_LOGW(TAG, "MQTT not connected, cannot send OTA NACK");
+        return;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "ota_nack", seq);
+    cJSON_AddNumberToObject(root, "expected_seq", ota_expected_seq);
+    char *json_str = cJSON_PrintUnformatted(root);
+
+    mqtt->publish(mqtt_base_topic + "/ota_ack", json_str, 1, false);
+
+    ESP_LOGW(TAG, "Sent NACK for chunk %u (expected %u)", seq, ota_expected_seq);
+
+    cJSON_free(json_str);
+    cJSON_Delete(root);
 }
 
 void NetworkManager::setupMqtt()
 {
-    mqtt->setUri(config_.mqtt_url); // Có thể lấy từ NVS/Config
-    mqtt->setClientId("PTalk_" + getDeviceMacID());
+    mqtt->setUri(config_.mqtt_url);
+    mqtt->setClientId("PTalk_" + getDeviceEfuseID());
 
     mqtt->onConnected([this]()
                       {
-        ESP_LOGI(TAG, "MQTT Connected. Subscribing...");
-        // Subscribe vào topic nhận lệnh: devices/MAC_ID/cmd
+        ESP_LOGI(TAG, "MQTT Connected - subscribing to topics");
+        
+        // Subscribe to command topic
         mqtt->subscribe(mqtt_base_topic + "/cmd", 1);
         
-        // Gửi tin nhắn "online" ngay khi kết nối
-        publishMqttStatus(); });
+        // Subscribe to OTA data topic (binary chunks)
+        mqtt->subscribe(mqtt_base_topic + "/ota_data", 1);
+        
+        // Subscribe to OTA ACK topic (optional - for server confirmation)
+        mqtt->subscribe(mqtt_base_topic + "/ota_ack", 0);
+        
+        // Send device handshake on connect
+        sendDeviceHandshake(); });
 
     mqtt->onMessage([this](const std::string &topic, const std::string &payload)
                     {
-        ESP_LOGI(TAG, "MQTT Msg [%s]: %s", topic.c_str(), payload.c_str());
-        
-        // Tận dụng lại hàm handleConfigCommand đã có của WebSocket để xử lý lệnh MQTT
-        // Điều này giúp bạn quản lý Volume, Brightness, Reboot... từ cả 2 nguồn
-        handleConfigCommand(payload); });
+                        ESP_LOGD(TAG, "MQTT message: %s (%zu bytes)", topic.c_str(), payload.size());
+
+                        if (topic == mqtt_base_topic + "/cmd")
+                        {
+                            // JSON config commands
+                            handleConfigCommand(payload);
+                        }
+                        else if (topic == mqtt_base_topic + "/ota_data")
+                        {
+                            // Binary OTA chunks
+                            handleOtaBinaryChunk((const uint8_t *)payload.data(), payload.size());
+                        }
+                        // Ignore ota_ack topic (server's ACK to our ACKs - optional)
+                    });
+
+    mqtt->onDisconnected([this]()
+                         {
+                             ESP_LOGW(TAG, "MQTT Disconnected");
+                             // Don't stop OTA if WiFi is still up - will reconnect
+                         });
 }
 
 void NetworkManager::publishMqttStatus()
@@ -749,42 +801,6 @@ void NetworkManager::publishMqttStatus()
     // Gửi heartbeat/status định kỳ hoặc khi có thay đổi
     std::string status_json = getCurrentStatusJson();
     mqtt->publish(mqtt_base_topic + "/status", status_json, 1, true);
-}
-
-// ============================================================================
-// OTA FIRMWARE UPDATE SUPPORT
-// ============================================================================
-bool NetworkManager::requestFirmwareUpdate(const std::string &version, uint32_t total_size, const std::string &sha256)
-{
-    if (!ws || !ws->isConnected())
-    {
-        ESP_LOGE(TAG, "WebSocket not connected, cannot request firmware");
-        return false;
-    }
-
-    firmware_download_active = true;
-    firmware_bytes_received = 0;
-    firmware_expected_size = total_size;
-    firmware_expected_sha256 = sha256;
-
-    // Create request message (JSON format)
-    std::string request = "{\"action\":\"update_firmware\"";
-    if (!version.empty())
-    {
-        request += ",\"version\":\"" + version + "\"";
-    }
-    if (total_size > 0)
-    {
-        request += ",\"size\":" + std::to_string(total_size);
-    }
-    if (!sha256.empty())
-    {
-        request += ",\"sha256\":\"" + sha256 + "\"";
-    }
-    request += "}";
-
-    ESP_LOGI(TAG, "Requesting firmware update: %s", request.c_str());
-    return sendText(request);
 }
 
 void NetworkManager::onFirmwareChunk(std::function<void(const uint8_t *, size_t)> cb)
@@ -1019,7 +1035,7 @@ void NetworkManager::openBLEConfigModeDeferred()
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WebSocket task to fully terminate
         ESP_LOGI(TAG, "WebSocket destroyed");
     }
-    //Stop mqtt client
+    // Stop mqtt client
     if (mqtt)
     {
         ESP_LOGI(TAG, "Stopping MQTT client...");
@@ -1202,35 +1218,22 @@ void NetworkManager::onConfigUpdate(std::function<void(const std::string &, cons
 
 bool NetworkManager::sendDeviceHandshake()
 {
-    if (!ws_running)
+    if (!mqtt || !mqtt->isConnected())
         return false;
 
-    std::string device_id = getDeviceEfuseID();
-    std::string app_version = app_meta::APP_VERSION;
-    std::string device_name = nmgr_load_str("device_name", "PTalk");
-    uint8_t battery = power_manager ? power_manager->getPercent() : 85;
-
-    // Build handshake message with device info
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "cmd", "device_handshake");
-    cJSON_AddStringToObject(root, "device_id", device_id.c_str());
-    cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
-    cJSON_AddStringToObject(root, "device_name", device_name.c_str());
-    cJSON_AddNumberToObject(root, "battery_percent", battery);
-    cJSON_AddStringToObject(root, "connectivity_state", "ONLINE");
-
-    char *json_str = cJSON_Print(root);
-    bool result = sendText(json_str);
-
-    cJSON_free(json_str);
-    cJSON_Delete(root);
-
-    ESP_LOGI(TAG, "Device handshake sent to server");
-    return result;
+    std::string status_json = getCurrentStatusJson();
+    return mqtt->publish(mqtt_base_topic + "/status", status_json, 1, true); // Retain = true
 }
 
 void NetworkManager::handleConfigCommand(const std::string &json_msg)
 {
+    // ✅ THÊM: Check MQTT connection trước khi xử lý
+    if (!mqtt || !mqtt->isConnected())
+    {
+        ESP_LOGW(TAG, "MQTT not connected, ignoring command");
+        return;
+    }
+
     cJSON *root = cJSON_Parse(json_msg.c_str());
     if (!root)
     {
@@ -1238,24 +1241,23 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         return;
     }
 
-    // Extract command type
     cJSON *cmd_obj = cJSON_GetObjectItem(root, "cmd");
     if (!cmd_obj || !cmd_obj->valuestring)
     {
-        ESP_LOGE(TAG, "Config command missing or invalid 'cmd' field");
+        ESP_LOGE(TAG, "Config command missing 'cmd' field");
         cJSON_Delete(root);
         return;
     }
 
     std::string cmd_str = cmd_obj->valuestring;
-    ws_config::ConfigCommand cmd = ws_config::parseCommandString(cmd_str);
+    mqtt_config::ConfigCommand cmd = mqtt_config::parseCommandString(cmd_str);
 
-    ESP_LOGI(TAG, "Processing config command: %s", cmd_str.c_str());
+    ESP_LOGI(TAG, "Processing MQTT config command: %s", cmd_str.c_str());
 
     // Process command
     switch (cmd)
     {
-    case ws_config::ConfigCommand::SET_AUDIO_VOLUME:
+    case mqtt_config::ConfigCommand::SET_AUDIO_VOLUME:
     {
         cJSON *vol_obj = cJSON_GetObjectItem(root, "volume");
         if (vol_obj && vol_obj->type == cJSON_Number)
@@ -1266,7 +1268,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         break;
     }
 
-    case ws_config::ConfigCommand::SET_BRIGHTNESS:
+    case mqtt_config::ConfigCommand::SET_BRIGHTNESS:
     {
         cJSON *bright_obj = cJSON_GetObjectItem(root, "brightness");
         if (bright_obj && bright_obj->type == cJSON_Number)
@@ -1277,7 +1279,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         break;
     }
 
-    case ws_config::ConfigCommand::SET_DEVICE_NAME:
+    case mqtt_config::ConfigCommand::SET_DEVICE_NAME:
     {
         cJSON *name_obj = cJSON_GetObjectItem(root, "device_name");
         if (name_obj && name_obj->valuestring)
@@ -1287,35 +1289,34 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         break;
     }
 
-    case ws_config::ConfigCommand::SET_WIFI:
+    case mqtt_config::ConfigCommand::SET_WIFI:
     {
         // Wi‑Fi configuration is NOT allowed via WebSocket; use BLE portal instead.
         cJSON *resp = cJSON_CreateObject();
-        cJSON_AddStringToObject(resp, "status", ws_config::statusToString(ws_config::ResponseStatus::NOT_SUPPORTED));
+        cJSON_AddStringToObject(resp, "status", mqtt_config::statusToString(mqtt_config::ResponseStatus::NOT_SUPPORTED));
         cJSON_AddStringToObject(resp, "message", "WiFi config not supported over WebSocket. Use BLE.");
-        cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
         char *resp_str = cJSON_Print(resp);
-        sendText(resp_str);
+        mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
         cJSON_free(resp_str);
         cJSON_Delete(resp);
         break;
     }
 
-    case ws_config::ConfigCommand::REQUEST_STATUS:
+    case mqtt_config::ConfigCommand::REQUEST_STATUS:
     {
         // Send current device status
         std::string status_json = getCurrentStatusJson();
-        sendText(status_json);
+        mqtt->publish(mqtt_base_topic + "/status", status_json.c_str(), 1, false);
         break;
     }
 
-    case ws_config::ConfigCommand::REBOOT:
+    case mqtt_config::ConfigCommand::REBOOT:
     {
         cJSON *ack = cJSON_CreateObject();
         cJSON_AddStringToObject(ack, "status", "ok");
         cJSON_AddStringToObject(ack, "message", "Rebooting...");
         char *ack_str = cJSON_Print(ack);
-        sendText(ack_str);
+        mqtt->publish(mqtt_base_topic + "/status", ack_str, 1, false);    
         cJSON_free(ack_str);
         cJSON_Delete(ack);
 
@@ -1325,7 +1326,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         break;
     }
 
-    case ws_config::ConfigCommand::REQUEST_OTA:
+    case mqtt_config::ConfigCommand::REQUEST_OTA:
     {
         // Server is initiating OTA - prepare to receive binary data
         uint32_t fw_size = 0;
@@ -1396,20 +1397,20 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         cJSON_AddStringToObject(resp, "device_id", getDeviceEfuseID().c_str());
 
         char *resp_str = cJSON_Print(resp);
-        sendText(resp_str);
+        mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
         cJSON_free(resp_str);
         cJSON_Delete(resp);
         break;
     }
 
-    case ws_config::ConfigCommand::REQUEST_BLE_CONFIG:
+    case mqtt_config::ConfigCommand::REQUEST_BLE_CONFIG:
     {
         cJSON *ack = cJSON_CreateObject();
         cJSON_AddStringToObject(ack, "status", "ok");
         cJSON_AddStringToObject(ack, "message", "Opening BLE config mode...");
         cJSON_AddStringToObject(ack, "device_id", getDeviceEfuseID().c_str());
         char *ack_str = cJSON_Print(ack);
-        sendText(ack_str);
+        mqtt->publish(mqtt_base_topic + "/status", ack_str, 1, false);
         cJSON_free(ack_str);
         cJSON_Delete(ack);
 
@@ -1433,34 +1434,22 @@ bool NetworkManager::applyVolumeConfig(uint8_t volume)
 {
     if (volume > 100)
         volume = 100;
-
     ESP_LOGI(TAG, "Applying volume config: %d%%", volume);
-
     if (audio_manager)
-    {
         audio_manager->setVolume(volume);
-    }
-
-    // Persist to NVS for next boot
     nmgr_save_u8("volume", volume);
 
-    // Send response
+    // Gửi phản hồi qua MQTT thay vì WS
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "ok");
     cJSON_AddNumberToObject(response, "volume", volume);
-    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
-    char *resp_str = cJSON_Print(response);
+    char *resp_str = cJSON_PrintUnformatted(response);
 
-    bool result = sendText(resp_str);
+    mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
 
-    cJSON_free(resp_str);
+    free(resp_str);
     cJSON_Delete(response);
-
-    // Callback
-    if (on_config_update_cb)
-        on_config_update_cb("volume", std::to_string(volume));
-
-    return result;
+    return true;
 }
 
 bool NetworkManager::applyBrightnessConfig(uint8_t brightness)
@@ -1482,19 +1471,14 @@ bool NetworkManager::applyBrightnessConfig(uint8_t brightness)
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "ok");
     cJSON_AddNumberToObject(response, "brightness", brightness);
-    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
-    char *resp_str = cJSON_Print(response);
+    char *resp_str = cJSON_PrintUnformatted(response);
 
-    bool result = sendText(resp_str);
+    mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
 
-    cJSON_free(resp_str);
+    free(resp_str);
     cJSON_Delete(response);
 
-    // Callback
-    if (on_config_update_cb)
-        on_config_update_cb("brightness", std::to_string(brightness));
-
-    return result;
+    return true;
 }
 
 bool NetworkManager::applyDeviceNameConfig(const std::string &name)
@@ -1507,19 +1491,14 @@ bool NetworkManager::applyDeviceNameConfig(const std::string &name)
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "ok");
     cJSON_AddStringToObject(response, "device_name", name.c_str());
-    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
-    char *resp_str = cJSON_Print(response);
+    char *resp_str = cJSON_PrintUnformatted(response);
 
-    bool result = sendText(resp_str);
+    mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
 
-    cJSON_free(resp_str);
+    free(resp_str);
     cJSON_Delete(response);
 
-    // Callback
-    if (on_config_update_cb)
-        on_config_update_cb("device_name", name);
-
-    return result;
+    return true;
 }
 
 bool NetworkManager::applyWiFiConfig(const std::string &ssid, const std::string &password)
@@ -1533,19 +1512,18 @@ bool NetworkManager::applyWiFiConfig(const std::string &ssid, const std::string 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "ok");
     cJSON_AddStringToObject(response, "message", "WiFi configured, restarting...");
-    cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
-    char *resp_str = cJSON_Print(response);
+    char *resp_str = cJSON_PrintUnformatted(response);
 
-    bool result = sendText(resp_str);
+    mqtt->publish(mqtt_base_topic + "/status", resp_str, 1, false);
 
-    cJSON_free(resp_str);
+    free(resp_str);
     cJSON_Delete(response);
 
     // Delay before restart
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
 
-    return result;
+    return true;
 }
 
 std::string NetworkManager::getCurrentStatusJson() const
