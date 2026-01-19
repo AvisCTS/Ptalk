@@ -174,13 +174,15 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
         add_c(CHR_UUID_WIFI_LIST, ESP_GATT_CHAR_PROP_BIT_READ);
         // New: WebSocket URL characteristic (read/write)
         add_c(CHR_UUID_WS_URL, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
+        // New: MQTT URL characteristic (read/write)
+        add_c(CHR_UUID_MQTT_URL, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE);
         break;
     }
 
     case ESP_GATTS_ADD_CHAR_EVT:
     {
         static int char_idx = 0;
-        if (char_idx < 11)
+        if (char_idx < 12)
             s_instance->char_handles[char_idx++] = param->add_char.attr_handle;
         break;
     }
@@ -196,13 +198,13 @@ void BluetoothService::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if
     case ESP_GATTS_CONNECT_EVT:
         s_instance->conn_id_ = param->connect.conn_id;
         // Reset WS URL auth on new connection
-        s_instance->ws_url_unlocked_ = false;
+        s_instance->url_unlocked_ = false;
         ESP_LOGI(TAG, "BLE Connected: conn_id=%d (ws_url_auth=OFF)", param->connect.conn_id);
         break;
 
     case ESP_GATTS_DISCONNECT_EVT:
         // Reset ws_url auth on disconnect
-        s_instance->ws_url_unlocked_ = false;
+        s_instance->url_unlocked_ = false;
         ESP_LOGI(TAG, "BLE Disconnected: conn_id=%d, reason=0x%x (ws_url_auth reset)", 
                  param->disconnect.conn_id, param->disconnect.reason);
         // Restart advertising để có thể scan lại
@@ -245,12 +247,12 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
     else if (h == char_handles[10])
     {
         // WS URL write requires prior auth token write; if not unlocked, treat this write as token attempt
-        if (!ws_url_unlocked_)
+        if (!url_unlocked_)
         {
             std::string token(reinterpret_cast<char *>(v), reinterpret_cast<char *>(v) + l);
             if (token == WS_URL_AUTH_TOKEN)
             {
-                ws_url_unlocked_ = true;
+                url_unlocked_ = true;
                 ESP_LOGI(TAG, "WS URL auth unlocked by token");
             }
             else
@@ -262,6 +264,28 @@ void BluetoothService::handleWrite(esp_ble_gatts_cb_param_t *param)
         {
             temp_cfg_.ws_url.assign((char *)v, l);
             ESP_LOGI(TAG, "WS URL set (%d bytes): %.*s", (int)l, (int)l, reinterpret_cast<char *>(v));
+        }
+    }
+    else if (h == char_handles[11])
+    {
+        // MQTT URL write requires prior WS URL auth; reuse same auth mechanism
+        if (!url_unlocked_)
+        {
+            std::string token(reinterpret_cast<char *>(v), reinterpret_cast<char *>(v) + l);
+            if (token == WS_URL_AUTH_TOKEN)
+            {
+                url_unlocked_ = true;
+                ESP_LOGI(TAG, "MQTT URL auth unlocked by token");
+            }
+            else
+            {
+                ESP_LOGW(TAG, "MQTT URL write blocked: invalid token. Send auth token first.");
+            }
+        }
+        else
+        {
+            temp_cfg_.mqtt_url.assign((char *)v, l);
+            ESP_LOGI(TAG, "MQTT URL set (%d bytes): %.*s", (int)l, (int)l, reinterpret_cast<char *>(v));
         }
     }
     else if (h == char_handles[7])
@@ -361,7 +385,7 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
     // UUID CHR_UUID_WS_URL
     else if (param->read.handle == char_handles[10])
     {
-        if (!ws_url_unlocked_)
+        if (!url_unlocked_)
         {
             static const char locked_msg[] = "LOCKED";
             rsp.attr_value.len = sizeof(locked_msg) - 1;
@@ -385,7 +409,32 @@ void BluetoothService::handleRead(esp_ble_gatts_cb_param_t *param, esp_gatt_if_t
             }
         }
     }
-    
+    else if (param->read.handle == char_handles[11])
+    {
+        if (!url_unlocked_)
+        {
+            static const char locked_msg[] = "LOCKED";
+            rsp.attr_value.len = sizeof(locked_msg) - 1;
+            memcpy(rsp.attr_value.value, locked_msg, rsp.attr_value.len);
+            ESP_LOGW(TAG, "MQTT URL read blocked: LOCKED (auth required)");
+        }
+        else
+        {
+            if (temp_cfg_.mqtt_url.empty())
+            {
+                static const char empty_msg[] = "EMPTY";
+                rsp.attr_value.len = sizeof(empty_msg) - 1;
+                memcpy(rsp.attr_value.value, empty_msg, rsp.attr_value.len);
+                ESP_LOGW(TAG, "MQTT URL read: value not set yet");
+            }
+            else
+            {
+                rsp.attr_value.len = temp_cfg_.mqtt_url.length();
+                memcpy(rsp.attr_value.value, temp_cfg_.mqtt_url.c_str(), rsp.attr_value.len);
+                ESP_LOGI(TAG, "MQTT URL read: %s (%d bytes)", temp_cfg_.mqtt_url.c_str(), (int)rsp.attr_value.len);
+            }
+        }
+    }
 
     esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, ESP_GATT_OK, &rsp);
 }

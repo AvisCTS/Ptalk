@@ -89,7 +89,7 @@ private:
     OnConfigComplete config_cb_ = nullptr;
 
     // Auth gate for WS URL only
-    bool ws_url_unlocked_ = false;
+    bool url_unlocked_ = false;
     static constexpr const char *WS_URL_AUTH_TOKEN = "PTALK_OK"; // token required to unlock WS URL
 
     std::string wifi_list_json_;
