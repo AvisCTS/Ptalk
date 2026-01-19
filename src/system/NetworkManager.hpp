@@ -199,6 +199,10 @@ private:
     // Handle inbound WS binary payloads (firmware or app data).
     void handleWsBinaryMessage(const uint8_t *data, size_t len);
 
+    // OTA chunk protocol ACK/NACK helpers
+    void sendOtaAck(uint32_t seq);
+    void sendOtaNack(uint32_t seq);
+
     // Uplink task for sending microphone data
     void uplinkTaskLoop();
     static void uplinkTaskEntry(void *arg);
@@ -279,6 +283,13 @@ private:
     uint32_t firmware_bytes_received = 0;
     uint32_t firmware_expected_size = 0;
     std::string firmware_expected_sha256;
+    
+    // OTA chunk protocol state
+    uint32_t ota_expected_seq = 0;       // Next expected sequence number
+    uint32_t ota_chunk_size = 2048;      // Chunk data size from server
+    uint32_t ota_total_chunks = 0;       // Total chunks expected
+    uint32_t ota_chunks_received = 0;    // Chunks successfully received
+    uint32_t ota_chunks_failed = 0;      // Chunks with CRC errors
 
     // WiFi retry state
     TaskHandle_t wifi_retry_task = nullptr;

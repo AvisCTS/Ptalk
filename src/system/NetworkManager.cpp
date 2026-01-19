@@ -16,6 +16,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_crc.h"  // For CRC32 verification
 
 std::string getDeviceMacID()
 {
@@ -504,26 +505,88 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
     // Check if this is firmware data during OTA download
     if (firmware_download_active)
     {
-        firmware_bytes_received += len;
+        // OTA Chunk Protocol: [4B seq][4B size][4B crc32][data...]
+        const size_t HEADER_SIZE = 12;  // 4 + 4 + 4 bytes
         
-        // Log only at progress milestones (25%, 50%, 75%, 100%) to reduce spam
+        if (len < HEADER_SIZE)
+        {
+            ESP_LOGE(TAG, "OTA chunk too small: %zu bytes (need >= %zu)", len, HEADER_SIZE);
+            sendOtaNack(ota_expected_seq);
+            return;
+        }
+        
+        // Parse header (little-endian)
+        uint32_t seq = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+        uint32_t chunk_size = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
+        uint32_t recv_crc = data[8] | (data[9] << 8) | (data[10] << 16) | (data[11] << 24);
+        
+        const uint8_t *chunk_data = data + HEADER_SIZE;
+        size_t actual_data_len = len - HEADER_SIZE;
+        
+        // Verify data size matches header
+        if (actual_data_len != chunk_size)
+        {
+            ESP_LOGE(TAG, "OTA chunk size mismatch: header=%u, actual=%zu", chunk_size, actual_data_len);
+            sendOtaNack(seq);
+            return;
+        }
+        
+        // Verify CRC32
+        uint32_t calc_crc = esp_crc32_le(0, chunk_data, chunk_size);
+        if (calc_crc != recv_crc)
+        {
+            ESP_LOGE(TAG, "OTA chunk %u CRC mismatch: recv=0x%08X, calc=0x%08X", seq, recv_crc, calc_crc);
+            ota_chunks_failed++;
+            sendOtaNack(seq);
+            return;
+        }
+        
+        // Verify sequence number (allow some tolerance for retries)
+        if (seq != ota_expected_seq)
+        {
+            if (seq < ota_expected_seq)
+            {
+                // Duplicate chunk (retry from server) - ACK but ignore
+                ESP_LOGW(TAG, "OTA duplicate chunk %u (expected %u) - ACKing", seq, ota_expected_seq);
+                sendOtaAck(seq);
+                return;
+            }
+            else
+            {
+                // Missed chunks - this is a problem
+                ESP_LOGE(TAG, "OTA chunk sequence gap: got %u, expected %u", seq, ota_expected_seq);
+                sendOtaNack(seq);
+                return;
+            }
+        }
+        
+        // Chunk verified - pass to OTA handler
+        firmware_bytes_received += chunk_size;
+        ota_chunks_received++;
+        ota_expected_seq++;
+        
+        // Send ACK for this chunk
+        sendOtaAck(seq);
+        
+        // Log progress at milestones
         if (firmware_expected_size > 0)
         {
             uint32_t percent_now = (firmware_bytes_received * 100) / firmware_expected_size;
             static uint32_t last_logged_percent = 0;
             
-            if (percent_now >= last_logged_percent + 25 || percent_now == 100)
+            if (percent_now >= last_logged_percent + 10 || percent_now == 100)
             {
-                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes)", 
-                         percent_now, firmware_bytes_received, firmware_expected_size);
-                last_logged_percent = (percent_now / 25) * 25;
+                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes, chunk %u/%u)", 
+                         percent_now, firmware_bytes_received, firmware_expected_size,
+                         ota_chunks_received, ota_total_chunks);
+                last_logged_percent = (percent_now / 10) * 10;
             }
         }
 
-        // Notify OTA updater
+        // Notify OTA updater with verified data only
         if (on_firmware_chunk_cb)
         {
-            on_firmware_chunk_cb(data, len);
+            on_firmware_chunk_cb(chunk_data, chunk_size);
         }
     }
     else
@@ -630,6 +693,24 @@ void NetworkManager::handleInteractionState(state::InteractionState s)
         // Khi không còn LISTENING, chúng ta không delete task từ đây
         // mà để task loop tự kiểm tra và thoát để đảm bảo an toàn dữ liệu.
     }
+}
+
+// ============================================================================
+// OTA CHUNK PROTOCOL ACK/NACK
+// ============================================================================
+void NetworkManager::sendOtaAck(uint32_t seq)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"ota_ack\":%u}", seq);
+    sendText(buf);
+}
+
+void NetworkManager::sendOtaNack(uint32_t seq)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"ota_nack\":%u}", seq);
+    sendText(buf);
+    ESP_LOGW(TAG, "Sent NACK for chunk %u", seq);
 }
 
 // ============================================================================
@@ -1215,14 +1296,37 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         {
             fw_sha256 = sha_obj->valuestring;
         }
+        
+        // Parse chunk protocol info
+        uint32_t chunk_size = 2048;  // Default
+        cJSON *chunk_obj = cJSON_GetObjectItem(root, "chunk_size");
+        if (chunk_obj && cJSON_IsNumber(chunk_obj))
+        {
+            chunk_size = static_cast<uint32_t>(chunk_obj->valuedouble);
+        }
+        
+        uint32_t total_chunks = 0;
+        cJSON *total_obj = cJSON_GetObjectItem(root, "total_chunks");
+        if (total_obj && cJSON_IsNumber(total_obj))
+        {
+            total_chunks = static_cast<uint32_t>(total_obj->valuedouble);
+        }
 
         // Setup OTA state to receive binary data
         firmware_download_active = true;
         firmware_bytes_received = 0;
         firmware_expected_size = fw_size;
         firmware_expected_sha256 = fw_sha256;
+        
+        // Initialize chunk protocol state
+        ota_expected_seq = 0;
+        ota_chunk_size = chunk_size;
+        ota_total_chunks = total_chunks;
+        ota_chunks_received = 0;
+        ota_chunks_failed = 0;
 
-        ESP_LOGI(TAG, "OTA initiated by server: size=%u, sha256=%s", fw_size, fw_sha256.c_str());
+        ESP_LOGI(TAG, "OTA initiated: size=%u, chunks=%u, chunk_size=%u, sha256=%s", 
+                 fw_size, total_chunks, chunk_size, fw_sha256.c_str());
 
         // CRITICAL: Notify AppController to setup OTA callbacks BEFORE sending ACK
         // This ensures callbacks are registered before binary data arrives

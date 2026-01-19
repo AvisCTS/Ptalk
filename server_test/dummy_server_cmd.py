@@ -4,6 +4,8 @@ import os
 import sys
 import json
 import hashlib
+import struct
+import zlib
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
@@ -135,38 +137,143 @@ def read_checksum(bin_path: str, provided: str | None) -> str:
     return h.hexdigest()
 
 
+# =====================================================
+# OTA CHUNK PROTOCOL WITH CRC32 VERIFICATION
+# =====================================================
+# Chunk format: [4B seq (LE)][4B size (LE)][4B crc32 (LE)][data...]
+# Device responds: {"ota_ack": seq} or {"ota_nack": seq}
+# Server retries on NACK or timeout
+
+OTA_CHUNK_SIZE = 2048  # Data payload size per chunk
+OTA_ACK_TIMEOUT = 5.0  # Seconds to wait for ACK
+OTA_MAX_RETRIES = 3    # Max retries per chunk
+
+# Global state for OTA ACK tracking
+ota_ack_event = asyncio.Event()
+ota_last_ack_seq = -1
+ota_last_nack_seq = -1
+
+
+def build_ota_chunk(seq: int, data: bytes) -> bytes:
+    """Build OTA chunk with header: [seq][size][crc32][data]"""
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    header = struct.pack("<III", seq, len(data), crc)
+    return header + data
+
+
+def handle_ota_ack(msg: dict):
+    """Process OTA ACK/NACK from device"""
+    global ota_last_ack_seq, ota_last_nack_seq, ota_ack_event
+    if "ota_ack" in msg:
+        ota_last_ack_seq = msg["ota_ack"]
+        ota_ack_event.set()
+        log("✅", f"ACK received for chunk {ota_last_ack_seq}")
+    elif "ota_nack" in msg:
+        ota_last_nack_seq = msg["ota_nack"]
+        ota_ack_event.set()
+        log("❌", f"NACK received for chunk {ota_last_nack_seq}")
+
+
+async def wait_for_ack(expected_seq: int, timeout: float = OTA_ACK_TIMEOUT) -> bool:
+    """Wait for ACK with specific sequence number. Returns True if ACK, False if NACK/timeout."""
+    global ota_ack_event, ota_last_ack_seq, ota_last_nack_seq
+    ota_ack_event.clear()
+    
+    try:
+        await asyncio.wait_for(ota_ack_event.wait(), timeout=timeout)
+        if ota_last_ack_seq == expected_seq:
+            return True
+        elif ota_last_nack_seq == expected_seq:
+            return False
+        else:
+            log("⚠️", f"Unexpected ACK seq: got {ota_last_ack_seq}, expected {expected_seq}")
+            return False
+    except asyncio.TimeoutError:
+        log("⏰", f"ACK timeout for chunk {expected_seq}")
+        return False
+
+
 async def handle_ota_command(ws: WebSocket, bin_path: str, checksum_hint: str | None):
+    global ota_last_ack_seq, ota_last_nack_seq
+    
     if not os.path.exists(bin_path):
         log("⚠️", f"File not found: {bin_path}")
         return
 
     size = os.path.getsize(bin_path)
     checksum = read_checksum(bin_path, checksum_hint)
+    
+    # Calculate total chunks
+    total_chunks = (size + OTA_CHUNK_SIZE - 1) // OTA_CHUNK_SIZE
 
-    # 1) Request OTA with size + checksum
-    req = {"cmd": "request_ota", "size": size, "sha256": checksum}
+    # 1) Request OTA with size + checksum + chunk info
+    req = {
+        "cmd": "request_ota", 
+        "size": size, 
+        "sha256": checksum,
+        "chunk_size": OTA_CHUNK_SIZE,
+        "total_chunks": total_chunks
+    }
     await ws.send_text(json.dumps(req))
-    log("➡️", f"Sent OTA request size={size} sha256={checksum}")
+    log("➡️", f"Sent OTA request size={size} chunks={total_chunks} sha256={checksum[:16]}...")
+    
+    # Reset ACK state
+    ota_last_ack_seq = -1
+    ota_last_nack_seq = -1
 
-    # 2) Stream binary in chunks
-    CHUNK = 2048
+    # 2) Stream binary in chunks with CRC32 verification
+    seq = 0
     sent = 0
+    failed_chunks = 0
+    
     try:
         with open(bin_path, "rb") as f:
             while True:
-                buf = f.read(CHUNK)
-                if not buf:
+                data = f.read(OTA_CHUNK_SIZE)
+                if not data:
                     break
-                await ws.send_bytes(buf)
-                sent += len(buf)
-                if sent % (CHUNK * 10) == 0:
-                    log("⬆️", f"Sent {sent}/{size} bytes")
+                
+                # Build chunk with CRC32
+                chunk = build_ota_chunk(seq, data)
+                
+                # Send with retry logic
+                success = False
+                for retry in range(OTA_MAX_RETRIES):
+                    await ws.send_bytes(chunk)
+                    
+                    if retry > 0:
+                        log("🔄", f"Retry {retry}/{OTA_MAX_RETRIES} for chunk {seq}")
+                    
+                    # Wait for ACK
+                    if await wait_for_ack(seq):
+                        success = True
+                        break
+                    else:
+                        log("⚠️", f"Chunk {seq} not ACKed, retrying...")
+                
+                if not success:
+                    failed_chunks += 1
+                    log("❌", f"Chunk {seq} failed after {OTA_MAX_RETRIES} retries")
+                    # Continue anyway - device will detect via final SHA256
+                
+                sent += len(data)
+                seq += 1
+                
+                # Progress log every 10 chunks
+                if seq % 10 == 0:
+                    percent = (sent * 100) // size
+                    log("⬆️", f"Progress: {percent}% ({seq}/{total_chunks} chunks, {sent}/{size} bytes)")
+                
                 await asyncio.sleep(0)  # yield
+                
     except Exception as e:
         log("❌", f"OTA send failed: {e}")
         return
 
-    log("✅", f"OTA binary sent: {sent}/{size} bytes")
+    if failed_chunks > 0:
+        log("⚠️", f"OTA completed with {failed_chunks} failed chunks")
+    else:
+        log("✅", f"OTA binary sent: {sent}/{size} bytes, {seq} chunks, all verified")
 
     # 3) Notify completion
     await ws.send_text("OTA_COMPLETE")
@@ -237,6 +344,9 @@ async def websocket_endpoint(ws: WebSocket):
                         log("📩 JSON", obj)
                         if cmd == "device_handshake":
                             ACTIVE_WS = ws
+                        # Handle OTA ACK/NACK
+                        if "ota_ack" in obj or "ota_nack" in obj:
+                            handle_ota_ack(obj)
                         continue
                 except Exception:
                     pass
@@ -372,8 +482,8 @@ async def console_loop(server: uvicorn.Server):
 
 
 async def main():
-    log("🚀", "Server starting at ws://0.0.0.0:80/ws")
-    config = uvicorn.Config(app, host="0.0.0.0", port=80, loop="asyncio")
+    log("🚀", "Server starting at ws://0.0.0.0:8000/ws")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, loop="asyncio")
     server = uvicorn.Server(config)
     await asyncio.gather(server.serve(), console_loop(server))
 
