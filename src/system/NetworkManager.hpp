@@ -15,8 +15,10 @@
 
 class WifiService;     // Low-level WiFi
 class WebSocketClient; // Low-level WebSocket
+class MqttClient;
 struct WifiInfo;
 class PowerManager;
+
 // NetworkManager coordinates Wi‑Fi and WebSocket, publishes connectivity state,
 // and bridges WS messages to the app. It owns retry logic; Wi‑Fi scanning/portal
 // and driver-level connection details stay in WifiService.
@@ -41,6 +43,8 @@ public:
 
         // WebSocket server endpoint
         std::string ws_url; // e.g. ws://192.168.1.100:8080/ws
+        // MQTT broker endpoint
+        std::string mqtt_url; // e.g. mqtt://broker.hivemq.com:
     };
 
     // ======================================================
@@ -100,7 +104,6 @@ public:
     void setManagers(class AudioManager *audio, class DisplayManager *display);
     void setPowerManager(PowerManager *power) { power_manager = power; }
 
-
     // Check if a speaking session is active (prevents SPEAKING spam).
     bool isSpeakingSessionActive() const { return speaking_session_active; }
 
@@ -136,7 +139,7 @@ public:
 
     // Open BLE config mode with WiFi scan (can be called proactively)
     void openBLEConfigMode();
-    
+
     // Deferred BLE config mode (called from separate task to avoid callback issues)
     void openBLEConfigModeDeferred();
 
@@ -195,13 +198,15 @@ private:
     // Process configuration command from WebSocket message
     void handleConfigCommand(const std::string &json_msg);
 
-
     // Handle inbound WS binary payloads (firmware or app data).
     void handleWsBinaryMessage(const uint8_t *data, size_t len);
 
     // OTA chunk protocol ACK/NACK helpers
     void sendOtaAck(uint32_t seq);
     void sendOtaNack(uint32_t seq);
+    // MQTT setup and status publishing
+    void setupMqtt();
+    void publishMqttStatus();
 
     // Uplink task for sending microphone data
     void uplinkTaskLoop();
@@ -227,7 +232,7 @@ private:
     std::unique_ptr<WebSocketClient> ws;
     // Bluetooth service for BLE config mode
     std::shared_ptr<BluetoothService> ble_service;
-    
+
     // External manager references for config updates (optional, set via setManagers)
     class AudioManager *audio_manager = nullptr;
     class DisplayManager *display_manager = nullptr;
@@ -253,7 +258,9 @@ private:
     bool ws_running = false;              // WS thực sự open chưa
     bool ws_immune_mode = false;          // Prevent WS close during critical operations (e.g. audio streaming)
     bool speaking_session_active = false; // Prevent SPEAKING state spam per TTS session
-
+                                          // Mqtt client for telemetry
+    std::unique_ptr<MqttClient> mqtt;
+    std::string mqtt_base_topic; // Ví dụ: "ptalk/DEVICE_ID"
     //
     StreamBufferHandle_t mic_encoded_sb = nullptr;
     TaskHandle_t uplink_task_handle = nullptr;
@@ -283,17 +290,17 @@ private:
     uint32_t firmware_bytes_received = 0;
     uint32_t firmware_expected_size = 0;
     std::string firmware_expected_sha256;
-    
+
     // OTA chunk protocol state
-    uint32_t ota_expected_seq = 0;       // Next expected sequence number
-    uint32_t ota_chunk_size = 2048;      // Chunk data size from server
-    uint32_t ota_total_chunks = 0;       // Total chunks expected
-    uint32_t ota_chunks_received = 0;    // Chunks successfully received
-    uint32_t ota_chunks_failed = 0;      // Chunks with CRC errors
+    uint32_t ota_expected_seq = 0;    // Next expected sequence number
+    uint32_t ota_chunk_size = 2048;   // Chunk data size from server
+    uint32_t ota_total_chunks = 0;    // Total chunks expected
+    uint32_t ota_chunks_received = 0; // Chunks successfully received
+    uint32_t ota_chunks_failed = 0;   // Chunks with CRC errors
 
     // WiFi retry state
     TaskHandle_t wifi_retry_task = nullptr;
-    
+
     // BLE config task (deferred from callback context)
     static void bleConfigTaskEntry(void *arg);
     TaskHandle_t ble_config_task = nullptr;

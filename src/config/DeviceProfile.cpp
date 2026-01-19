@@ -204,6 +204,7 @@ namespace user_cfg
         std::string wifi_ssid;
         std::string wifi_pass;
         std::string ws_url; // Stored WS URL (may be full URL or host:port)
+        std::string mqtt_url; // Stored MQTT URL (may be full URL or host:port)
     };
 
     static std::string get_string(nvs_handle_t h, const char *key)
@@ -248,7 +249,8 @@ namespace user_cfg
 
         // Optional WS URL override
         cfg.ws_url = get_string(h, "ws_url");
-
+        // Optional MQTT URL override
+        cfg.mqtt_url = get_string(h, "mqtt_url");
         cfg.volume = get_u8(h, "volume", cfg.volume);
         cfg.brightness = get_u8(h, "brightness", cfg.brightness);
 
@@ -269,7 +271,8 @@ namespace user_cfg
                 nvs_set_str(h, "pass", data.pass.c_str());
             if (!data.ws_url.empty())
                 nvs_set_str(h, "ws_url", data.ws_url.c_str());
-
+            if (!data.mqtt_url.empty())
+                nvs_set_str(h, "mqtt_url", data.mqtt_url.c_str());
             nvs_set_u8(h, "volume", data.volume);
             nvs_set_u8(h, "brightness", data.brightness);
 
@@ -454,9 +457,38 @@ bool DeviceProfile::setup(AppController &app)
         return std::string("ws://") + val + "/ws";
     };
 
+    auto normalize_mqtt_url = [](std::string val) -> std::string {
+        // Trim spaces
+        auto trim = [](std::string &s){
+            while (!s.empty() && (s.front()==' '||s.front()=='\t'||s.front()=='\n'||s.front()=='\r')) s.erase(s.begin());
+            while (!s.empty() && (s.back()==' '||s.back()=='\t'||s.back()=='\n'||s.back()=='\r')) s.pop_back();
+        };
+        trim(val);
+        if (val.empty()) return std::string();
+        // Already a mqtt(s):// URL
+        if (val.rfind("mqtt://", 0) == 0 || val.rfind("mqtts://", 0) == 0) {
+            return val;
+        }
+        // Convert tcp(s):// to mqtt(s)://
+        if (val.rfind("tcp://", 0) == 0) {
+            val.replace(0, 6, "mqtt://");
+            return val;
+        }
+        if (val.rfind("tcps://", 0) == 0) {
+            val.replace(0, 7, "mqtts://");
+            return val;
+        }
+        // Assume host:port → prepend mqtt://
+        return std::string("mqtt://") + val;
+    };
+
     const std::string default_hostport = "171.226.10.121:8000";
-    std::string chosen = user.ws_url.empty() ? default_hostport : user.ws_url;
-    net_cfg.ws_url = normalize_ws_url(chosen);
+    std::string chosen_ws = user.ws_url.empty() ? default_hostport : user.ws_url;
+    net_cfg.ws_url = normalize_ws_url(chosen_ws);
+    
+    const std::string default_mqtt = "171.226.10.121:1883";
+    std::string chosen_mqtt = user.mqtt_url.empty() ? default_mqtt : user.mqtt_url;
+    net_cfg.mqtt_url = normalize_mqtt_url(chosen_mqtt);
 
     if (!network_mgr->init(net_cfg))
     {

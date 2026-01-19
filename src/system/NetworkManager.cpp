@@ -1,6 +1,7 @@
 #include "NetworkManager.hpp"
 #include "WifiService.hpp"
 #include "WebSocketClient.hpp"
+#include "MqttClient.hpp"
 #include "system/AudioManager.hpp"
 #include "system/DisplayManager.hpp"
 #include "system/PowerManager.hpp"
@@ -16,7 +17,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_crc.h"  // For CRC32 verification
+#include "esp_crc.h" // For CRC32 verification
 
 std::string getDeviceMacID()
 {
@@ -33,10 +34,10 @@ std::string getDeviceMacID()
 static const char *TAG = "NetworkManager";
 
 // Forward declarations for NVS storage utility functions
-static bool nmgr_save_u8(const char* key, uint8_t value);
-static bool nmgr_save_str(const char* key, const std::string& value);
-static uint8_t nmgr_load_u8(const char* key, uint8_t def_val);
-static std::string nmgr_load_str(const char* key, const char* def_val);
+static bool nmgr_save_u8(const char *key, uint8_t value);
+static bool nmgr_save_str(const char *key, const std::string &value);
+static uint8_t nmgr_load_u8(const char *key, uint8_t def_val);
+static std::string nmgr_load_str(const char *key, const char *def_val);
 
 NetworkManager::NetworkManager() = default;
 
@@ -98,6 +99,13 @@ bool NetworkManager::init()
             this->handleInteractionState(s);
         });
 
+    mqtt = std::make_unique<MqttClient>();
+    mqtt->init();
+
+    // Tạo topic dựa trên MAC ID
+    mqtt_base_topic = "devices/" + getDeviceMacID();
+
+    setupMqtt();
     ESP_LOGI(TAG, "NetworkManager init OK");
     return true;
 }
@@ -357,7 +365,7 @@ void NetworkManager::handleWifiStatus(int status)
         ESP_LOGW(TAG, "WiFi → DISCONNECTED");
 
         wifi_ready = false;
-
+        mqtt->stop();
         // Only close WS if NOT in immune mode (during audio streaming, keep WS alive)
         if (!ws_immune_mode)
         {
@@ -392,7 +400,7 @@ void NetworkManager::handleWifiStatus(int status)
         wifi_ready = true;
         ws_should_run = true;
         ws_retry_timer = 500; // Wait 500ms for WiFi to stabilize before WS connect
-
+        mqtt->start();
         publishState(state::ConnectivityState::CONNECTING_WS);
         break;
     }
@@ -443,10 +451,10 @@ void NetworkManager::handleWsStatus(int status)
         ws_running = true;
 
         publishState(state::ConnectivityState::ONLINE);
-        
+
         // Send device handshake to server with all info and device_id for linking
         sendDeviceHandshake();
-        
+
         break;
     }
 }
@@ -475,7 +483,7 @@ void NetworkManager::handleWsTextMessage(const std::string &msg)
     if (json)
     {
         cJSON *cmd_field = cJSON_GetObjectItem(json, "cmd");
-        if (cmd_field && cmd_field->valuestring)  // Check if it's a string
+        if (cmd_field && cmd_field->valuestring) // Check if it's a string
         {
             // This is a config command
             cJSON_Delete(json);
@@ -506,23 +514,23 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
     if (firmware_download_active)
     {
         // OTA Chunk Protocol: [4B seq][4B size][4B crc32][data...]
-        const size_t HEADER_SIZE = 12;  // 4 + 4 + 4 bytes
-        
+        const size_t HEADER_SIZE = 12; // 4 + 4 + 4 bytes
+
         if (len < HEADER_SIZE)
         {
             ESP_LOGE(TAG, "OTA chunk too small: %zu bytes (need >= %zu)", len, HEADER_SIZE);
             sendOtaNack(ota_expected_seq);
             return;
         }
-        
+
         // Parse header (little-endian)
         uint32_t seq = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
         uint32_t chunk_size = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
         uint32_t recv_crc = data[8] | (data[9] << 8) | (data[10] << 16) | (data[11] << 24);
-        
+
         const uint8_t *chunk_data = data + HEADER_SIZE;
         size_t actual_data_len = len - HEADER_SIZE;
-        
+
         // Verify data size matches header
         if (actual_data_len != chunk_size)
         {
@@ -530,7 +538,7 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
             sendOtaNack(seq);
             return;
         }
-        
+
         // Verify CRC32
         uint32_t calc_crc = esp_crc32_le(0, chunk_data, chunk_size);
         if (calc_crc != recv_crc)
@@ -540,7 +548,7 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
             sendOtaNack(seq);
             return;
         }
-        
+
         // Verify sequence number (allow some tolerance for retries)
         if (seq != ota_expected_seq)
         {
@@ -559,24 +567,24 @@ void NetworkManager::handleWsBinaryMessage(const uint8_t *data, size_t len)
                 return;
             }
         }
-        
+
         // Chunk verified - pass to OTA handler
         firmware_bytes_received += chunk_size;
         ota_chunks_received++;
         ota_expected_seq++;
-        
+
         // Send ACK for this chunk
         sendOtaAck(seq);
-        
+
         // Log progress at milestones
         if (firmware_expected_size > 0)
         {
             uint32_t percent_now = (firmware_bytes_received * 100) / firmware_expected_size;
             static uint32_t last_logged_percent = 0;
-            
+
             if (percent_now >= last_logged_percent + 10 || percent_now == 100)
             {
-                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes, chunk %u/%u)", 
+                ESP_LOGI(TAG, "OTA progress: %u%% (%u/%u bytes, chunk %u/%u)",
                          percent_now, firmware_bytes_received, firmware_expected_size,
                          ota_chunks_received, ota_total_chunks);
                 last_logged_percent = (percent_now / 10) * 10;
@@ -711,6 +719,36 @@ void NetworkManager::sendOtaNack(uint32_t seq)
     snprintf(buf, sizeof(buf), "{\"ota_nack\":%u}", seq);
     sendText(buf);
     ESP_LOGW(TAG, "Sent NACK for chunk %u", seq);
+}
+
+void NetworkManager::setupMqtt()
+{
+    mqtt->setUri(config_.mqtt_url); // Có thể lấy từ NVS/Config
+    mqtt->setClientId("PTalk_" + getDeviceMacID());
+
+    mqtt->onConnected([this]()
+                      {
+        ESP_LOGI(TAG, "MQTT Connected. Subscribing...");
+        // Subscribe vào topic nhận lệnh: devices/MAC_ID/cmd
+        mqtt->subscribe(mqtt_base_topic + "/cmd", 1);
+        
+        // Gửi tin nhắn "online" ngay khi kết nối
+        publishMqttStatus(); });
+
+    mqtt->onMessage([this](const std::string &topic, const std::string &payload)
+                    {
+        ESP_LOGI(TAG, "MQTT Msg [%s]: %s", topic.c_str(), payload.c_str());
+        
+        // Tận dụng lại hàm handleConfigCommand đã có của WebSocket để xử lý lệnh MQTT
+        // Điều này giúp bạn quản lý Volume, Brightness, Reboot... từ cả 2 nguồn
+        handleConfigCommand(payload); });
+}
+
+void NetworkManager::publishMqttStatus()
+{
+    // Gửi heartbeat/status định kỳ hoặc khi có thay đổi
+    std::string status_json = getCurrentStatusJson();
+    mqtt->publish(mqtt_base_topic + "/status", status_json, 1, true);
 }
 
 // ============================================================================
@@ -888,14 +926,14 @@ void NetworkManager::retryWifiThenBLE()
     {
         wifi->disconnect();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
-        
+
         // Properly stop WiFi before deinit
         esp_wifi_stop();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WiFi to stop
-        
+
         esp_wifi_deinit();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for deinit to complete
-        
+
         ESP_LOGI(TAG, "WiFi fully stopped and deinitialized for BLE");
     }
 
@@ -912,14 +950,14 @@ void NetworkManager::startBLEConfigMode()
     {
         ESP_LOGW(TAG, "Start BLE Config Mode now (RAM should be free)");
         ESP_LOGI(TAG, "Passing %d cached networks to BLE service", cached_networks.size());
-        
+
         // Prepare current device configuration to restore in BLE
         BluetoothService::ConfigData current_cfg;
         current_cfg.device_name = nmgr_load_str("device_name", "PTalk");
         current_cfg.volume = nmgr_load_u8("volume", 60);
         current_cfg.brightness = nmgr_load_u8("brightness", 100);
         current_cfg.ws_url = nmgr_load_str("ws_url", "");
-        
+
         ble_service->init(config_.ap_ssid, cached_networks, &current_cfg);
         ble_service->start();
     }
@@ -940,7 +978,7 @@ void NetworkManager::bleConfigTaskEntry(void *arg)
 void NetworkManager::openBLEConfigMode()
 {
     ESP_LOGI(TAG, "Opening BLE config mode - spawning deferred task");
-    
+
     // CRITICAL: Cannot cleanup WebSocket from within its own callback!
     // Spawn a separate task to handle the cleanup safely
     if (ble_config_task != nullptr)
@@ -948,15 +986,14 @@ void NetworkManager::openBLEConfigMode()
         ESP_LOGW(TAG, "BLE config task already running");
         return;
     }
-    
+
     xTaskCreate(
         &NetworkManager::bleConfigTaskEntry,
         "BLEConfig",
         6144,
         this,
         5,
-        &ble_config_task
-    );
+        &ble_config_task);
 }
 
 void NetworkManager::openBLEConfigModeDeferred()
@@ -965,24 +1002,24 @@ void NetworkManager::openBLEConfigModeDeferred()
 
     // 0. STOP NETWORK MANAGER COMPLETELY
     ESP_LOGI(TAG, "Stopping all network operations...");
-    
-    started = false;  // Signal network loop task to exit gracefully
+
+    started = false; // Signal network loop task to exit gracefully
     ws_should_run = false;
     ws_running = false;
-    
+
     // Wait for network loop task to exit gracefully (started=false signals it)
     // Task will set task_handle = nullptr before self-deleting
     vTaskDelay(pdMS_TO_TICKS(500));
-    
+
     // Now safe to destroy WebSocket from outside callback context
     if (ws)
     {
         ESP_LOGI(TAG, "Destroying WebSocket...");
-        ws->close();  // This can now safely destroy the client
+        ws->close();                    // This can now safely destroy the client
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WebSocket task to fully terminate
         ESP_LOGI(TAG, "WebSocket destroyed");
     }
-    
+
     // Only try to delete task if it hasn't already self-deleted
     // (task clears its own handle before vTaskDelete(nullptr))
     if (task_handle)
@@ -997,7 +1034,7 @@ void NetworkManager::openBLEConfigModeDeferred()
     {
         ESP_LOGI(TAG, "Network task already exited");
     }
-    
+
     ESP_LOGI(TAG, "Network operations stopped");
 
     // 1. Disconnect WiFi first to stop STA from connecting
@@ -1022,14 +1059,14 @@ void NetworkManager::openBLEConfigModeDeferred()
     {
         wifi->disconnect();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for disconnect to complete
-        
+
         // Properly stop WiFi before deinit
         esp_wifi_stop();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WiFi to stop
-        
+
         esp_wifi_deinit();
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for deinit to complete
-        
+
         ESP_LOGI(TAG, "WiFi fully stopped and deinitialized for BLE");
     }
 
@@ -1087,7 +1124,7 @@ state::EmotionState NetworkManager::parseEmotionCode(const std::string &code)
 // REAL-TIME WEBSOCKET CONFIGURATION
 // ============================================================================
 
-static bool nmgr_save_u8(const char* key, uint8_t value)
+static bool nmgr_save_u8(const char *key, uint8_t value)
 {
     nvs_handle_t h;
     if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK)
@@ -1098,7 +1135,7 @@ static bool nmgr_save_u8(const char* key, uint8_t value)
     return e == ESP_OK;
 }
 
-static bool nmgr_save_str(const char* key, const std::string& value)
+static bool nmgr_save_str(const char *key, const std::string &value)
 {
     nvs_handle_t h;
     if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK)
@@ -1109,7 +1146,7 @@ static bool nmgr_save_str(const char* key, const std::string& value)
     return e == ESP_OK;
 }
 
-static uint8_t nmgr_load_u8(const char* key, uint8_t def_val)
+static uint8_t nmgr_load_u8(const char *key, uint8_t def_val)
 {
     uint8_t v = def_val;
     nvs_handle_t h;
@@ -1121,7 +1158,7 @@ static uint8_t nmgr_load_u8(const char* key, uint8_t def_val)
     return v;
 }
 
-static std::string nmgr_load_str(const char* key, const char* def_val)
+static std::string nmgr_load_str(const char *key, const char *def_val)
 {
     std::string out;
     nvs_handle_t h;
@@ -1176,7 +1213,7 @@ bool NetworkManager::sendDeviceHandshake()
 
     char *json_str = cJSON_Print(root);
     bool result = sendText(json_str);
-    
+
     cJSON_free(json_str);
     cJSON_Delete(root);
 
@@ -1273,7 +1310,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         sendText(ack_str);
         cJSON_free(ack_str);
         cJSON_Delete(ack);
-        
+
         // Delay before reboot to send ack
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
@@ -1296,15 +1333,15 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         {
             fw_sha256 = sha_obj->valuestring;
         }
-        
+
         // Parse chunk protocol info
-        uint32_t chunk_size = 2048;  // Default
+        uint32_t chunk_size = 2048; // Default
         cJSON *chunk_obj = cJSON_GetObjectItem(root, "chunk_size");
         if (chunk_obj && cJSON_IsNumber(chunk_obj))
         {
             chunk_size = static_cast<uint32_t>(chunk_obj->valuedouble);
         }
-        
+
         uint32_t total_chunks = 0;
         cJSON *total_obj = cJSON_GetObjectItem(root, "total_chunks");
         if (total_obj && cJSON_IsNumber(total_obj))
@@ -1317,7 +1354,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         firmware_bytes_received = 0;
         firmware_expected_size = fw_size;
         firmware_expected_sha256 = fw_sha256;
-        
+
         // Initialize chunk protocol state
         ota_expected_seq = 0;
         ota_chunk_size = chunk_size;
@@ -1325,7 +1362,7 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         ota_chunks_received = 0;
         ota_chunks_failed = 0;
 
-        ESP_LOGI(TAG, "OTA initiated: size=%u, chunks=%u, chunk_size=%u, sha256=%s", 
+        ESP_LOGI(TAG, "OTA initiated: size=%u, chunks=%u, chunk_size=%u, sha256=%s",
                  fw_size, total_chunks, chunk_size, fw_sha256.c_str());
 
         // CRITICAL: Notify AppController to setup OTA callbacks BEFORE sending ACK
@@ -1367,10 +1404,10 @@ void NetworkManager::handleConfigCommand(const std::string &json_msg)
         sendText(ack_str);
         cJSON_free(ack_str);
         cJSON_Delete(ack);
-        
+
         // Delay before opening BLE to send ack
         vTaskDelay(pdMS_TO_TICKS(1000));
-        
+
         // Open BLE config mode (this will scan WiFi and prepare for BLE)
         openBLEConfigMode();
         break;
@@ -1405,9 +1442,9 @@ bool NetworkManager::applyVolumeConfig(uint8_t volume)
     cJSON_AddNumberToObject(response, "volume", volume);
     cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
     char *resp_str = cJSON_Print(response);
-    
+
     bool result = sendText(resp_str);
-    
+
     cJSON_free(resp_str);
     cJSON_Delete(response);
 
@@ -1439,9 +1476,9 @@ bool NetworkManager::applyBrightnessConfig(uint8_t brightness)
     cJSON_AddNumberToObject(response, "brightness", brightness);
     cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
     char *resp_str = cJSON_Print(response);
-    
+
     bool result = sendText(resp_str);
-    
+
     cJSON_free(resp_str);
     cJSON_Delete(response);
 
@@ -1458,15 +1495,15 @@ bool NetworkManager::applyDeviceNameConfig(const std::string &name)
 
     // Persist to NVS for next boot
     nmgr_save_str("device_name", name);
-    
+
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "ok");
     cJSON_AddStringToObject(response, "device_name", name.c_str());
     cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
     char *resp_str = cJSON_Print(response);
-    
+
     bool result = sendText(resp_str);
-    
+
     cJSON_free(resp_str);
     cJSON_Delete(response);
 
@@ -1490,9 +1527,9 @@ bool NetworkManager::applyWiFiConfig(const std::string &ssid, const std::string 
     cJSON_AddStringToObject(response, "message", "WiFi configured, restarting...");
     cJSON_AddStringToObject(response, "device_id", getDeviceEfuseID().c_str());
     char *resp_str = cJSON_Print(response);
-    
+
     bool result = sendText(resp_str);
-    
+
     cJSON_free(resp_str);
     cJSON_Delete(response);
 
@@ -1512,7 +1549,7 @@ std::string NetworkManager::getCurrentStatusJson() const
     uint8_t brightness = nmgr_load_u8("brightness", 100);
     uint8_t battery = power_manager ? power_manager->getPercent() : 85;
     uint32_t uptime_sec = static_cast<uint32_t>(esp_timer_get_time() / 1000000ULL);
-    
+
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "ok");
     cJSON_AddStringToObject(root, "device_id", device_id.c_str());
@@ -1520,13 +1557,13 @@ std::string NetworkManager::getCurrentStatusJson() const
     cJSON_AddNumberToObject(root, "battery_percent", battery);
     cJSON_AddStringToObject(root, "connectivity_state", "ONLINE");
     cJSON_AddStringToObject(root, "firmware_version", app_version.c_str());
-    cJSON_AddNumberToObject(root, "volume", volume); // From NVS (WS/BLE persisted)
+    cJSON_AddNumberToObject(root, "volume", volume);         // From NVS (WS/BLE persisted)
     cJSON_AddNumberToObject(root, "brightness", brightness); // From NVS (WS/BLE persisted)
     cJSON_AddNumberToObject(root, "uptime_sec", uptime_sec);
 
     char *json_str = cJSON_Print(root);
     std::string result(json_str);
-    
+
     cJSON_free(json_str);
     cJSON_Delete(root);
 

@@ -26,7 +26,7 @@ public:
         std::string ssid;
         std::string pass;
         std::string ws_url; // WebSocket URL (e.g., ws://host:port/ws)
-        
+        std::string mqtt_url; // MQTT broker URL (e.g., mqtt://host:port)
         ConfigData() = default;
     };
 
@@ -60,6 +60,7 @@ public:
     static constexpr uint16_t CHR_UUID_DEVICE_ID = 0xFF0A;
     static constexpr uint16_t CHR_UUID_WIFI_LIST = 0xFF0B;
     static constexpr uint16_t CHR_UUID_WS_URL = 0xFF0C;
+    static constexpr uint16_t CHR_UUID_MQTT_URL = 0xFF0D;
 
 private:
     static BluetoothService *s_instance;
@@ -82,7 +83,7 @@ private:
     esp_gatt_if_t gatts_if_ = 0; // Stores GATT interface assigned at service creation
     uint16_t conn_id_ = 0xFFFF;
     uint16_t service_handle_ = 0;
-    uint16_t char_handles[11] = {0}; // Handles for the 11 characteristics (added WS_URL)
+    uint16_t char_handles[12] = {0}; // Handles for the 12 characteristics (added WS_URL and MQTT_URL)
 
     ConfigData temp_cfg_;
     OnConfigComplete config_cb_ = nullptr;
