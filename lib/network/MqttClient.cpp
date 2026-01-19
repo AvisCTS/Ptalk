@@ -53,7 +53,7 @@ void MqttClient::start()
     // -------------------------------
     // Memory-conscious configuration
     // -------------------------------
-    cfg.buffer_size = 512;
+    cfg.buffer_size = 4096;      // Reduced from 8KB
     cfg.out_buffer_size = 512;
     cfg.keepalive = 60;
     cfg.disable_auto_reconnect = false;
