@@ -1019,6 +1019,14 @@ void NetworkManager::openBLEConfigModeDeferred()
         vTaskDelay(pdMS_TO_TICKS(500)); // Wait for WebSocket task to fully terminate
         ESP_LOGI(TAG, "WebSocket destroyed");
     }
+    //Stop mqtt client
+    if (mqtt)
+    {
+        ESP_LOGI(TAG, "Stopping MQTT client...");
+        mqtt->stop();
+        vTaskDelay(pdMS_TO_TICKS(500)); // Wait for MQTT to fully terminate
+        ESP_LOGI(TAG, "MQTT client stopped");
+    }
 
     // Only try to delete task if it hasn't already self-deleted
     // (task clears its own handle before vTaskDelete(nullptr))
